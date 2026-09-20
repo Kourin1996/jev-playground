@@ -1,0 +1,121 @@
+<!doctype html>
+<!--
+  Source for the development sample PDF (scripts/make-sample-pdf.mjs).
+
+  Entirely fictional. It exists so the viewer, highlighting, and zoom behaviour can be verified
+  locally without waiting for the acceptance fixtures described in tests/fixtures/README.md.
+
+  Three properties are deliberate and the tests depend on them:
+    1. The no-refund clause never uses the everyday word 返金, so exact search for it finds nothing
+       while meaning search should still reach the clause.
+    2. One sentence appears verbatim on page 1 and again on page 3, so a result must highlight the
+       occurrence it represents rather than the first match.
+    3. It runs to three pages, so zooming while later pages are still rendering is reproducible.
+-->
+<html lang="ja">
+    <head>
+        <meta charset="utf-8" />
+        <title>サービス利用契約書（架空）</title>
+        <style>
+            @page {
+                size: A4;
+                margin: 20mm;
+            }
+            body {
+                font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+                font-size: 10.5pt;
+                line-height: 1.9;
+            }
+            h1 {
+                font-size: 16pt;
+                text-align: center;
+                margin-bottom: 2em;
+            }
+            h2 {
+                font-size: 12pt;
+                margin: 1.6em 0 0.4em;
+            }
+            p {
+                margin: 0 0 0.9em;
+                text-align: justify;
+            }
+            .page-break {
+                page-break-before: always;
+            }
+            .note {
+                margin-top: 3em;
+                font-size: 9pt;
+                color: #555;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>サービス利用契約書（架空）</h1>
+
+        <h2>第1条（目的）</h2>
+        <p>
+            本契約は、甲が乙に対して提供する本サービスの利用条件を定めることを目的とする。本サービスの内容および仕様は、甲が別途定める利用案内によるものとし、甲は必要に応じてこれを変更することができる。変更を行う場合、甲は乙に対し、相当な期間をもってその旨を通知する。
+        </p>
+
+        <h2>第2条（申込みおよび成立）</h2>
+        <p>
+            乙は、甲の定める方法により本サービスの利用を申し込むものとする。本契約は、甲が当該申込みを承諾した時点で成立するものとし、乙はその時点から本契約に定める義務を負う。甲は、申込みの内容に不備があると認めるときは、承諾を留保することができる。
+        </p>
+
+        <h2>第3条（料金）</h2>
+        <p>
+            乙は、本サービスの対価として、甲の定める月額料金を毎月末日までに支払うものとする。振込に要する手数料は乙の負担とする。支払が遅延した場合、乙は年十四・六パーセントの割合による遅延損害金を支払うものとする。
+        </p>
+
+        <h2>第4条（中途解約）</h2>
+        <p>
+            乙は、契約期間の満了前であっても、本契約を解約することができる。ただし、中途解約の場合、既に支払われた料金の返還は行わないものとする。この取扱いは、解約の理由のいかんを問わず適用される。
+        </p>
+
+        <div class="page-break"></div>
+
+        <h2>第5条（解約の予告）</h2>
+        <p>
+            乙が本契約を解約しようとするときは、契約期間の満了日の30日前までに、書面により甲に通知しなければならない。当該通知が期限を過ぎた場合、解約の効力は翌期の末日に生じるものとする。なお、書面による通知に代えて、甲の指定する電子的方法によることができる。
+        </p>
+
+        <h2>第6条（権利の譲渡禁止）</h2>
+        <p>
+            本サービスを利用する権利は、第三者に譲渡し、または承継させることができない。乙が本条に違反した場合、甲は催告を要せず直ちに本契約を解除することができる。ただし、合併その他の一般承継の場合は、この限りでない。
+        </p>
+
+        <h2>第7条（禁止事項）</h2>
+        <p>
+            乙は、本サービスの利用にあたり、法令に違反する行為、甲または第三者の権利を侵害する行為、および本サービスの運営を妨げる行為を行ってはならない。甲は、乙がこれらに該当すると判断した場合、事前の通知なく本サービスの提供を停止することができる。
+        </p>
+
+        <h2>第8条（秘密保持）</h2>
+        <p>
+            甲および乙は、本契約に関連して知り得た相手方の営業上または技術上の情報を、相手方の事前の書面による承諾なく第三者に開示してはならない。ただし、法令に基づき開示が求められる場合は、この限りでない。
+        </p>
+
+        <div class="page-break"></div>
+
+        <h2>第9条（免責）</h2>
+        <p>
+            甲は、本サービスの提供に関し、乙に生じた間接損害、逸失利益および第三者からの請求については、その責任を負わないものとする。甲が責任を負う場合であっても、その範囲は乙が直近十二か月に支払った料金の総額を上限とする。
+        </p>
+
+        <h2>第10条（サービスの変更および終了）</h2>
+        <p>
+            甲は、事業上の必要により本サービスの全部または一部を変更し、または終了することができる。この場合、甲は終了日の三か月前までに乙に通知するものとし、未経過期間に対応する料金を日割りにより清算する。
+        </p>
+
+        <h2>第11条（準拠法および管轄）</h2>
+        <p>本契約は日本法に準拠する。本契約に関して生じた紛争については、甲の本店所在地を管轄する地方裁判所を第一審の専属的合意管轄裁判所とする。</p>
+
+        <h2>第12条（反復条項の確認）</h2>
+        <p>
+            既に支払われた料金の返還は行わないものとする。本条は第4条の定めを確認的に再掲したものであり、両者の内容に差異はない。当事者は、本条の存在により第4条の解釈が変更されるものではないことを確認する。
+        </p>
+
+        <p class="note">
+            この文書は架空のものであり、実在する企業、製品、契約とは一切関係がありません。動作確認およびデモンストレーション以外の目的には使用しないでください。
+        </p>
+    </body>
+</html>

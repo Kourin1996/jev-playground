@@ -1,0 +1,18 @@
+{
+    "$schema": "./node_modules/wrangler/config-schema.json",
+    "name": "pdf-finder",
+    "main": "worker/index.ts",
+    "compatibility_date": "2026-09-20",
+    // Serves the built client and the Worker from one origin, which is what spec §9.1 requires.
+    "assets": {
+        "directory": "./dist/client",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+    },
+    "observability": {
+        "enabled": true,
+        "traces": {
+            "enabled": true,
+        },
+    },
+}

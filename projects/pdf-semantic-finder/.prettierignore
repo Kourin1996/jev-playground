@@ -1,0 +1,12 @@
+# Vendored agent skills: third-party content, kept byte-for-byte as published.
+.agents/
+.claude/
+
+# Generated
+public/pdfjs/
+dist/
+worker-env.d.ts
+package-lock.json
+
+# Vendored Untitled UI reference, kept as published
+UNTITLED.md

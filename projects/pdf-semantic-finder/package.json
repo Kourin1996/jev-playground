@@ -1,0 +1,58 @@
+{
+    "name": "pdf-finder",
+    "version": "0.0.0",
+    "type": "module",
+    "private": true,
+    "scripts": {
+        "dev": "vite",
+        "build": "npm run assets && tsc -b && vite build",
+        "preview": "vite preview",
+        "assets": "node scripts/copy-pdfjs-assets.mjs",
+        "typecheck": "tsc -b",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:e2e": "playwright test",
+        "eval": "node --experimental-strip-types tests/run-evaluation.ts",
+        "prepare": "node scripts/copy-pdfjs-assets.mjs",
+        "cf-typegen": "wrangler types --path worker-env.d.ts",
+        "deploy": "npm run build && wrangler deploy",
+        "fixtures:sample": "node scripts/make-sample-pdf.mjs",
+        "verify": "npm run assets && npm run typecheck && npm test && npm run test:e2e"
+    },
+    "dependencies": {
+        "@tailwindcss/vite": "^4.2.2",
+        "@untitledui/file-icons": "^0.0.9",
+        "@untitledui/icons": "^0.0.22",
+        "motion": "^12.38.0",
+        "pdfjs-dist": "^6.3.289",
+        "react": "^19.2.4",
+        "react-aria": "^3.47.0",
+        "react-aria-components": "^1.21.1",
+        "react-dom": "^19.2.4",
+        "tailwind-merge": "^3.7.0",
+        "tailwindcss": "^4.2.2",
+        "tailwindcss-animate": "^1.0.7",
+        "tailwindcss-react-aria-components": "^2.0.1"
+    },
+    "devDependencies": {
+        "@cloudflare/vite-plugin": "^1.56.0",
+        "@playwright/test": "^1.63.0",
+        "@trivago/prettier-plugin-sort-imports": "^6.0.2",
+        "@types/node": "^25.5.0",
+        "@types/react": "^19.2.14",
+        "@types/react-dom": "^19.2.3",
+        "@vitejs/plugin-react": "^6.0.1",
+        "globals": "^16.5.0",
+        "prettier": "^3.8.1",
+        "prettier-plugin-tailwindcss": "^0.7.2",
+        "typescript": "^5.9.3",
+        "typescript-eslint": "^8.53.1",
+        "vite": "^8.0.2",
+        "vitest": "^5.0.1",
+        "wrangler": "^4.135.0"
+    },
+    "allowScripts": {
+        "esbuild@0.28.1": true,
+        "workerd@1.20260918.1": true
+    }
+}

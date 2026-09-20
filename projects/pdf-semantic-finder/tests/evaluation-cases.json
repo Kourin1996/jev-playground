@@ -1,0 +1,58 @@
+{
+    "$comment": [
+        "The fixed evaluation set required by spec §11.1: 20 queries over three fictional PDFs,",
+        "in four categories (8 paraphrase, 4 denial, 4 condition, 4 no-answer).",
+        "",
+        "It must be kept separate from any threshold-tuning examples.",
+        "",
+        "Expectations name a passage by a distinctive snippet rather than by segment ID. Segment IDs",
+        "depend on the segmentation heuristics, so a frozen set keyed on them would silently break -",
+        "or silently pass against the wrong passage - the moment those heuristics are tuned. The",
+        "harness matches snippets with the same normalization exact search uses.",
+        "",
+        "STATUS: the cases below are the worked examples from spec §1 and §13 only. The full 20-query",
+        "set cannot be authored until the fixture PDFs exist, because an expectation can only name a",
+        "passage a document actually contains. See tests/fixtures/README.md."
+    ],
+    "schema": {
+        "id": "stable case identifier",
+        "document": "file name inside tests/fixtures/",
+        "category": "paraphrase | denial | condition | no_answer",
+        "query": "the reader's own words",
+        "expect": {
+            "kind": "top3_contains | status_not",
+            "snippet": "distinctive text the intended passage contains (top3_contains)",
+            "status": "a status the search must not return (status_not)"
+        }
+    },
+    "cases": [
+        {
+            "id": "paraphrase-01",
+            "document": "contract-ja.pdf",
+            "category": "paraphrase",
+            "query": "途中でやめたら、お金は戻る？",
+            "expect": { "kind": "top3_contains", "snippet": "既払料金の返還は行わない" }
+        },
+        {
+            "id": "condition-01",
+            "document": "contract-ja.pdf",
+            "category": "condition",
+            "query": "やめるときは何日前に連絡が必要？",
+            "expect": { "kind": "top3_contains", "snippet": "30日前" }
+        },
+        {
+            "id": "denial-01",
+            "document": "contract-ja.pdf",
+            "category": "denial",
+            "query": "買った人以外も使える？",
+            "expect": { "kind": "top3_contains", "snippet": "第三者に譲渡" }
+        },
+        {
+            "id": "no-answer-01",
+            "document": "contract-ja.pdf",
+            "category": "no_answer",
+            "query": "ログインの方法を教えてください",
+            "expect": { "kind": "status_not", "status": "matched" }
+        }
+    ]
+}
