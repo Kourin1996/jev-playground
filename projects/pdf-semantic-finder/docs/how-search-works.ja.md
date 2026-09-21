@@ -9,8 +9,6 @@
 要件は [spec.md](spec.md) にあります。仕様から逸脱した判断は同文書の §14 に記録しています。
 以下の例はすべて `tests/fixtures/sample-contract-ja.pdf` に対する実際の実行から採取したものです。
 
-図解による入門は [how-search-works-eli5.ja.html](how-search-works-eli5.ja.html) にあります。
-
 ## 1. 全体像
 
 ```text

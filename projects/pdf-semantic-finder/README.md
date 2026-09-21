@@ -198,10 +198,8 @@ without them.
 
 ### Verifying it works
 
-[docs/local-verification.md](docs/local-verification.md) is the step-by-step runbook: install,
-generate a sample PDF, run every automated check, and walk the acceptance criteria by hand in the
-browser. `npm run verify` runs the automated part. A Japanese translation is at
-[docs/local-verification.ja.md](docs/local-verification.ja.md).
+`npm run verify` runs the automated part: assets, typecheck, unit tests and the end-to-end suite.
+Generate the fixture PDFs first, or the suites skip the tests that need them.
 
 ### Fixture PDFs
 
@@ -284,9 +282,7 @@ routinely redistributed.
 [docs/how-search-works.md](docs/how-search-works.md) walks through the implemented mechanism with
 real captured data: how text items become segments, what the Jev request and response actually look
 like, how relevance is decided, and how a result is mapped back to a position on the page. A
-Japanese translation is at [docs/how-search-works.ja.md](docs/how-search-works.ja.md), and
-[docs/how-search-works-eli5.ja.html](docs/how-search-works-eli5.ja.html) is a picture-led Japanese
-walkthrough of segmentation and the Jev request for readers new to the project.
+Japanese translation is at [docs/how-search-works.ja.md](docs/how-search-works.ja.md).
 
 ## Architecture
 

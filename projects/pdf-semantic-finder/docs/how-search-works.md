@@ -10,9 +10,6 @@ page.
 Requirements live in [spec.md](spec.md); decisions that deviate from it are recorded in its §14.
 Every example below is captured from a real run against `tests/fixtures/sample-contract-ja.pdf`.
 
-For a picture-led walkthrough aimed at readers new to the project, open
-[how-search-works-eli5.ja.html](how-search-works-eli5.ja.html) (Japanese).
-
 ## 1. Overview
 
 ```text
