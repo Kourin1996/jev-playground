@@ -198,36 +198,80 @@ The §11.1 evaluation set is `tests/evaluation-cases.json`: 32 queries over two 
 anything, and `bitcoin.pdf`, with eighteen queries written by an outside reviewer. Both are
 present. See `tests/fixtures/README.md` for what each file is for.
 
-## Publishing this source
+## Publishing this repository
 
-`package.json` carries `"private": true` and the repository has no `LICENSE`, so as it stands it is
-not published and grants nobody any rights. Before that changes, two things need settling.
+This is about making the repository **publicly readable**, which is a narrower question than
+open-sourcing it. `package.json` carries `"private": true` and there is no `LICENSE`, so nothing
+here grants anyone rights; that is a coherent position for a source-visible repository and needs no
+change. What follows is what would become visible.
 
-**Untitled UI's licence forbids publishing its source.** `src/components/base/` and
-`src/components/application/` hold 22 component files taken from Untitled UI React, and `UNTITLED.md`
-is Untitled UI's own documentation embedded verbatim. Their licence says a licensee may not
+### No credentials are committed
+
+Verified across all 514 blobs that have ever existed in the history, not just the working tree: the
+real key in `.dev.vars` appears in no commit, `.dev.vars` is gitignored, and a sweep for AWS keys,
+private-key blocks, bearer tokens and assigned secrets found nothing outside lockfiles and fixtures.
+`.dev.vars.example` holds an empty value. No home paths and no personal email addresses are
+committed. Re-run the check before publishing rather than trusting this paragraph.
+
+### Deploying is allowed; publishing the source is the part that is not
+
+Untitled UI's licence permits the deployment explicitly — "Creating websites, web applications, and
+apps for yourself, your company, or for a client" — and the deployed build does not expose their
+source: the production build emits no source maps and no `sourceMappingURL`, so what reaches a
+browser is compiled output.
+
+A public repository is the specific thing the licence names:
 
 > Expose raw Untitled UI React source code in any product, including open-source repositories,
 > downloadable assets, or browser-accessible code.
 
-and that this applies to the free and paid tiers alike, with an exception only for components their
-documentation explicitly marks MIT. **This blocks publishing the repository as it stands**, and the
-options are to confirm those particular components are among the MIT-marked ones, to replace them,
-or to publish without them. The npm packages `@untitledui/icons` and `@untitledui/file-icons` are
-MIT and are not affected — the problem is vendored source, not the dependencies.
+> Distribute or publish the files or assets within the files online, or share access to the files.
 
-**Vendored agent skills.** `.agents/` and `.claude/skills/` hold about a hundred files of
-third-party rules and guidance, one set with its own `LICENSE.txt`. They are working material, not
-part of the product, and the simplest answer is to leave them out of anything published.
+`src/components/base/` and `src/components/application/` hold 22 component files from Untitled UI
+React. The licence exempts components "made available as open-source software under the MIT
+License… clearly marked as open source within the documentation and codebase" — **none of the 22
+carries any such marking**, so none can be shown to be in that exempt set on the evidence in this
+repository.
 
-Lower risk but worth a decision: `assets/bitcoin.pdf` is the Bitcoin whitepaper, which is routinely
-redistributed and ships inside Bitcoin Core under MIT.
+Three ways forward: confirm with Untitled UI which components are the MIT-marked ones; replace the
+ten that are actually used (`button`, `input`, `label`, `hint-text`, `tooltip`, `badges`,
+`progress-indicators`, `input-group`, `button-utility`, `file-upload-base`) and delete the twelve
+that are not used at all; or keep the repository private and publish only the deployed site.
 
-**No credentials are committed.** Verified across every blob in the history, not just the working
-tree: the real key in `.dev.vars` appears in no commit, `.dev.vars` is gitignored, and a sweep for
-AWS keys, private-key blocks, bearer tokens and assigned secrets found nothing outside lockfiles and
-fixtures. `.dev.vars.example` holds an empty value. Re-run that check before publishing rather than
-trusting this paragraph.
+`UNTITLED.md` is a different case — it is Untitled UI's own published `AGENTS.md`, meant to be
+placed in a repository that uses their components. That is not raw component source, and the risk
+is correspondingly lower, but it is still their document reproduced verbatim; replacing it with a
+link is the cautious option.
+
+The npm packages `@untitledui/icons` and `@untitledui/file-icons` are MIT and are not affected. The
+problem is vendored source, not dependencies.
+
+### Vendored agent skills need their licence text
+
+`.agents/skills/` holds five skills pulled from public repositories, with `.claude/skills/`
+symlinked to them and `skills-lock.json` recording where each came from:
+
+| Skill                         | Source                     | Licence    | Licence text present |
+| ----------------------------- | -------------------------- | ---------- | -------------------- |
+| `frontend-design`             | `anthropics/skills`        | Apache-2.0 | yes, `LICENSE.txt`   |
+| `vercel-composition-patterns` | `vercel-labs/agent-skills` | MIT        | no                   |
+| `vercel-react-best-practices` | `vercel-labs/agent-skills` | MIT        | no                   |
+| `web-design-guidelines`       | `vercel-labs/agent-skills` | MIT        | no                   |
+| `workers-best-practices`      | `cloudflare/skills`        | Apache-2.0 | no                   |
+
+Both licences allow redistribution and both require the notice to travel with the copy. Either add
+the missing licence files or leave `.agents/` and `.claude/` out of what is published — they are
+working material rather than part of the product.
+
+### Working notes are now ignored rather than merely untracked
+
+`p` is a pasted review note; `docs/code-review-*.md` are pre-release review reports listing gaps
+that are still open. They were untracked, which meant a single `git add -A` would have published a
+list of this deployment's unfixed weaknesses alongside it. They are gitignored now, and kept
+locally because they are worth keeping.
+
+`assets/bitcoin.pdf` is the Bitcoin whitepaper, which ships inside Bitcoin Core under MIT and is
+routinely redistributed.
 
 ## How it works
 
