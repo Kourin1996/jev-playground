@@ -79,9 +79,9 @@ describe("outcomeOfSettledPanel", () => {
      */
     const list = "3 results\n1. Page 3\n第4条（中途解約）…";
 
-    it("separates a confident match from a hedged one", () => {
+    it("separates a confident match from a near miss that is not offered", () => {
         expect(outcomeOfSettledPanel(list, 200)).toEqual({ kind: "final", status: "matched" });
-        expect(outcomeOfSettledPanel(`${list}\nThese passages may be related. Review them before relying on them.`, 200)).toEqual({
+        expect(outcomeOfSettledPanel("A passage came close to the relevance threshold but did not meet it, so none is offered.", 200)).toEqual({
             kind: "final",
             status: "uncertain",
         });

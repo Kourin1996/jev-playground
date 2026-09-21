@@ -260,58 +260,6 @@ test.describe("assets/bitcoin.pdf", () => {
         await expect(articles.nth(1).getByText("Context sent with this passage")).toBeVisible();
     });
 
-    test("exposes the context a passage was judged with, and navigates to it", async ({ page }) => {
-        // §6.3 lets the model use the neighbouring passages to resolve what the target refers to.
-        // A reader who cannot reach those neighbours is worse off than the model was.
-        await open(page);
-
-        await page.route("**/api/search", async (route: Route) => {
-            const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string; segments: Array<{ id: string }> };
-            // A segment in the middle of a page, so it has a neighbour on each side.
-            const target = body.segments[5];
-            await route.fulfill({
-                contentType: "application/x-ndjson",
-                body:
-                    JSON.stringify({
-                        type: "final",
-                        documentId: body.documentId,
-                        requestId: body.requestId,
-                        status: "matched",
-                        results: [{ segmentId: target.id, score: 2, relevantProbability: 0.97, confidence: 0.9 }],
-                        evaluatedSegmentCount: body.segments.length,
-                        requestCount: 1,
-                        model: "jev-1.13.0",
-                        elapsedMs: 1,
-                    }) + "\n",
-            });
-        });
-
-        await page.getByRole("radio", { name: "Meaning" }).click();
-        await page.getByLabel("Search query").fill("what does this passage depend on");
-        await page.getByRole("button", { name: "Search", exact: true }).click();
-        await expect(page.locator("ol li")).toHaveCount(1);
-
-        const disclosure = page.getByText("Show surrounding text");
-        await expect(disclosure).toBeVisible();
-        // Named for what it is. The provider never reports which context it used.
-        await expect(page.getByText("what Jev used")).toHaveCount(0);
-
-        await disclosure.click();
-        const before = page.locator("ol li button", { hasText: "before" });
-        await expect(before).toBeVisible();
-        const neighbourText = (await before.innerText())
-            .replace(/^before\s*/u, "")
-            .replace(/\s+/gu, " ")
-            .slice(0, 24);
-
-        await before.click();
-
-        // It becomes a result of its own, without a second search.
-        await expect(page.locator("ol li")).toHaveCount(2);
-        await expect(page.locator("ol li").nth(1)).toContainText(neighbourText);
-        await expect(page.locator(".pdf-finder-highlight").first()).toBeVisible();
-    });
-
     test("takes its results from a streamed response", async ({ page }) => {
         // The Worker answers with newline-delimited JSON — a progress line per batch and one final
         // line — so the reader sees passages while the rest are still being judged. Playwright

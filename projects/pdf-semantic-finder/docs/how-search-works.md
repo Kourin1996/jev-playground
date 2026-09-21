@@ -659,9 +659,12 @@ out which segments they are without anything extra travelling to the Worker and 
 makes it the selected result — nothing is re-evaluated and the rest of the list stays as the search
 left it.
 
-The control that opens them reads **"Show surrounding text"**, and what it reveals is described as
-what was _sent_ with the passage — never as "what Jev used". The response does not report which
-context influenced an answer, and saying otherwise would be inventing evidence.
+The results panel no longer offers a way to open them. It briefly did, and the reason it was added
+is answered better by the viewer itself: selecting a result scrolls the passage into the middle of
+the page it sits on, with its neighbours around it — the document, rather than a summary of the
+document. The extracted-text view still lists the context each passage was sent with, described as
+what was _sent_ and never as "what Jev used": the response does not report which context influenced
+an answer, and saying otherwise would be inventing evidence.
 
 ## 7.5 What the result panel shows, and why the numbers are on it now
 

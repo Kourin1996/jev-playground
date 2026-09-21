@@ -313,24 +313,6 @@ export type SearchHit = {
      * shared its request. Treat it as a reading, not a measurement.
      */
     judgement?: SearchResultRecord;
-    /**
-     * The neighbouring passages that travelled with this one, and which segment each of them is.
-     *
-     * Only for meaning results. A clause whose limit lives next door — `前項の期限を守った場合に限り`
-     * — cannot be read from the target alone, and §6.3 now permits the model to use the neighbours
-     * for exactly that. A reader who cannot reach them is worse off than the model was.
-     *
-     * The provider does not report which context it used, so this is what was **sent**, never what
-     * was relied on. The wording in the panel says so.
-     */
-    contextBefore?: SearchHitContext;
-    contextAfter?: SearchHitContext;
-};
-
-export type SearchHitContext = {
-    /** The neighbouring segment, so the reader can be taken to it in the document. */
-    segmentId: string;
-    text: string;
 };
 
 export type SearchStatus = "matched" | "uncertain" | "no_match";

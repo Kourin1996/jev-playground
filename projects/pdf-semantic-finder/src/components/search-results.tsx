@@ -29,11 +29,6 @@ export type SearchResultsProps = {
     onSelect: (key: string) => void;
     errorMessage: string | null;
     locationErrorMessage: string | null;
-    /**
-     * Opens a neighbouring passage that travelled as context. Null when the caller cannot resolve
-     * one, which is the case for exact results.
-     */
-    onOpenSegment?: (segmentId: string) => void;
     /** Physical pages that produced nothing to search, so an empty result can say so. */
     unsearchedPages: number[];
     /**
@@ -43,6 +38,15 @@ export type SearchResultsProps = {
     unsupportedLayoutPages: number[];
     /** Which mode produced this result; an empty result means different things in each. */
     mode: SearchMode;
+    /**
+     * The extracted-text view's toggle.
+     *
+     * It lives in this panel rather than under the viewer because it belongs with the other things
+     * said *about* the search — what each passage was judged to be, most of all — and not with the
+     * controls for reading the document.
+     */
+    isShowingExtractedText: boolean;
+    onToggleExtractedText: () => void;
     /**
      * The query these results came from, which is not necessarily the one in the search bar.
      *
@@ -124,9 +128,16 @@ const REVEAL_STEP = 50;
 const describePages = (pages: number[], plural: string, singular = plural): string =>
     pages.length === 1 ? `Page ${pages[0]} ${singular}.` : `Pages ${pages.join(", ")} ${plural}.`;
 
+/**
+ * What the panel says about a state, beyond the results themselves.
+ *
+ * `uncertain` no longer has results to caveat: a passage below the matched threshold is not offered
+ * as a candidate at all (§7). The note is what is left of it — something came close, and saying so
+ * is more use than either silence or handing over the near miss.
+ */
 const STATUS_NOTE: Record<SearchStatus, string | null> = {
     matched: null,
-    uncertain: "These passages may be related. Review them before relying on them.",
+    uncertain: "A passage came close to the relevance threshold but did not meet it, so none is offered. Try rewording the question.",
     no_match: null,
 };
 
@@ -153,8 +164,9 @@ export const SearchResults = ({
     locationErrorMessage,
     unsearchedPages,
     unsupportedLayoutPages,
-    onOpenSegment,
     mode,
+    isShowingExtractedText,
+    onToggleExtractedText,
     query,
     progress,
 }: SearchResultsProps) => {
@@ -188,11 +200,24 @@ export const SearchResults = ({
 
     if (!hasDocument) return null;
 
+    const debugControl = (
+        // `px-3` rather than the panel's `px-6`: the button carries its own padding, and what
+        // should line up with the text above is the button's label, not its edge.
+        <div className="px-3 pt-1 pb-2">
+            <Button size="sm" color="tertiary" onClick={onToggleExtractedText}>
+                {isShowingExtractedText ? "Hide extracted text" : "View extracted text"}
+            </Button>
+        </div>
+    );
+
     if (errorMessage !== null) {
         return (
-            <div className="flex flex-col gap-2 px-5 py-4">
-                <p className="text-sm font-semibold text-error-primary">The search could not be completed</p>
-                <p className="text-sm text-tertiary">{errorMessage}</p>
+            <div className="flex flex-col">
+                <div className="flex flex-col gap-2 px-5 py-4">
+                    <p className="text-sm font-semibold text-error-primary">The search could not be completed</p>
+                    <p className="text-sm text-tertiary">{errorMessage}</p>
+                </div>
+                {debugControl}
             </div>
         );
     }
@@ -215,51 +240,65 @@ export const SearchResults = ({
             </div>
         );
 
-    if (progress !== null && results.length === 0) return <div className="flex h-full flex-col">{progressNote}</div>;
+    if (progress !== null && results.length === 0)
+        return (
+            <div className="flex h-full flex-col">
+                {progressNote}
+                {debugControl}
+            </div>
+        );
 
     if (status === null && progress === null) {
         return (
-            <div className="flex flex-col gap-2 px-5 py-4">
-                <p className="text-sm text-tertiary">Enter a query to search this document.</p>
-                {/*
-                 * The two modes differ enough that a reader who picks the wrong one reads the
-                 * empty result as a statement about the document. Naming both here costs a line
-                 * and is the only place it can be said before the first search.
-                 */}
-                <p className="text-xs text-quaternary">
-                    <span className="font-semibold">Exact text</span> finds the characters you typed. <span className="font-semibold">Meaning</span> asks the
-                    model which passage answers the question, and sends the extracted text to do it.
-                </p>
+            <div className="flex flex-col">
+                <div className="flex flex-col gap-2 px-5 py-4">
+                    <p className="text-sm text-tertiary">Enter a query to search this document.</p>
+                    {/*
+                     * The two modes differ enough that a reader who picks the wrong one reads the
+                     * empty result as a statement about the document. Naming both here costs a line
+                     * and is the only place it can be said before the first search.
+                     */}
+                    <p className="text-xs text-quaternary">
+                        <span className="font-semibold">Exact text</span> finds the characters you typed. <span className="font-semibold">Meaning</span> asks
+                        the model which passage answers the question, and sends the extracted text to do it.
+                    </p>
+                </div>
+                {debugControl}
             </div>
         );
     }
 
     if (results.length === 0 && status !== null) {
         return (
-            <div className="flex flex-col gap-2 px-5 py-4">
-                {/*
-                 * What was searched and what was found are two separate statements. Naming the
-                 * pages that were never searched keeps "no relevant passage" from being read as
-                 * "the document does not say" (spec §10).
-                 */}
-                <p className="text-sm text-tertiary">{emptyResultNote(mode, unsearchedPages.length === 0)}</p>
-                {unsearchedPages.length > 0 && <p className="text-sm text-warning-primary">{describePages(unsearchedPages, "could not be searched")}</p>}
-                {unsupportedLayoutPages.length > 0 && (
-                    <p className="text-sm text-warning-primary">
-                        {describePages(
-                            unsupportedLayoutPages,
-                            "use a layout this proof of concept does not fully support",
-                            "uses a layout this proof of concept does not fully support",
-                        )}
+            <div className="flex flex-col">
+                <div className="flex flex-col gap-2 px-5 py-4">
+                    {/*
+                     * What was searched and what was found are two separate statements. Naming the
+                     * pages that were never searched keeps "no relevant passage" from being read as
+                     * "the document does not say" (spec §10).
+                     */}
+                    <p className="text-sm text-tertiary">
+                        {status === "uncertain" ? STATUS_NOTE.uncertain : emptyResultNote(mode, unsearchedPages.length === 0)}
                     </p>
-                )}
-                {/*
-                 * True of every search, because OCR is never run (spec §10). A page whose heading
-                 * is text and whose body is an image is not an excluded page — some text came off
-                 * it — so nothing above would mention it, and "no relevant passage" would read as
-                 * "the document does not say".
-                 */}
-                <p className="text-xs text-quaternary">Text inside images was not searched. This does not prove the document has no answer.</p>
+                    {unsearchedPages.length > 0 && <p className="text-sm text-warning-primary">{describePages(unsearchedPages, "could not be searched")}</p>}
+                    {unsupportedLayoutPages.length > 0 && (
+                        <p className="text-sm text-warning-primary">
+                            {describePages(
+                                unsupportedLayoutPages,
+                                "use a layout this proof of concept does not fully support",
+                                "uses a layout this proof of concept does not fully support",
+                            )}
+                        </p>
+                    )}
+                    {/*
+                     * True of every search, because OCR is never run (spec §10). A page whose heading
+                     * is text and whose body is an image is not an excluded page — some text came off
+                     * it — so nothing above would mention it, and "no relevant passage" would read as
+                     * "the document does not say".
+                     */}
+                    <p className="text-xs text-quaternary">Text inside images was not searched. This does not prove the document has no answer.</p>
+                </div>
+                {debugControl}
             </div>
         );
     }
@@ -293,6 +332,8 @@ export const SearchResults = ({
                     Not a measured match: both move with the passages the same request carried.
                 </p>
             )}
+
+            {debugControl}
 
             <div className="flex items-center justify-between gap-2 px-6 pt-1 pb-2">
                 <p className="text-xs font-semibold text-tertiary">
@@ -371,38 +412,6 @@ export const SearchResults = ({
                                 )}
                             </span>
                         </button>
-
-                        {/*
-                         * The neighbours that travelled with this passage, on the selected result
-                         * only. §6.3 lets the model read them to resolve what the passage refers
-                         * to, so a clause whose limit lives next door — 前項の期限を守った場合に限り
-                         * — is unreadable without them.
-                         *
-                         * "Sent with", never "used": the response does not report which context
-                         * influenced the answer, and saying otherwise would invent evidence.
-                         */}
-                        {index === selectedIndex && (result.contextBefore !== undefined || result.contextAfter !== undefined) && (
-                            <details className="px-3 pb-1">
-                                <summary className="cursor-pointer py-1 text-xs text-quaternary select-none">Show surrounding text</summary>
-                                <div className="flex flex-col gap-1.5 pt-1 pb-1">
-                                    {([result.contextBefore, result.contextAfter] as const).map(
-                                        (context, position) =>
-                                            context !== undefined && (
-                                                <button
-                                                    key={context.segmentId}
-                                                    type="button"
-                                                    onClick={() => onOpenSegment?.(context.segmentId)}
-                                                    disabled={onOpenSegment === undefined}
-                                                    className="rounded-lg px-2 py-1.5 text-left text-xs text-quaternary not-disabled:cursor-pointer not-disabled:hover:bg-primary_hover"
-                                                >
-                                                    <span className="font-semibold">{position === 0 ? "before" : "after"}</span>
-                                                    <span className="line-clamp-3"> {context.text}</span>
-                                                </button>
-                                            ),
-                                    )}
-                                </div>
-                            </details>
-                        )}
                     </li>
                 ))}
 

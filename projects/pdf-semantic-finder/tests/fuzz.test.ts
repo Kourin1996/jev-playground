@@ -259,8 +259,12 @@ describe("rankResults invariants", () => {
             const best = Math.max(...[...answers.values()].map((a) => a.probabilities["2"]));
             const expectedStatus = best >= 0.65 ? "matched" : best >= 0.35 ? "uncertain" : "no_match";
             expect(outcome.status).toBe(expectedStatus);
-            if (expectedStatus === "no_match") expect(outcome.results).toEqual([]);
-            else expect(outcome.results.length).toBeGreaterThan(0);
+
+            // Only a passage at or above the matched threshold is ever offered. `uncertain` says
+            // something was close; it does not hand the reader the near miss.
+            if (expectedStatus === "matched") expect(outcome.results.length).toBeGreaterThan(0);
+            else expect(outcome.results).toEqual([]);
+            for (const result of outcome.results) expect(result.relevantProbability).toBeGreaterThanOrEqual(0.65);
         }
     });
 });

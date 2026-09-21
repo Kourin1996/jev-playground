@@ -392,18 +392,40 @@ describe("rankResults", () => {
         if (outcome.ok) expect(outcome.status).toBe("matched");
     });
 
-    it("classifies as uncertain just below the matched threshold", () => {
+    it("classifies as uncertain just below the matched threshold, and offers nothing", () => {
+        // The state says something was close. It does not hand the reader the near miss: a passage
+        // the model was unsure about used to arrive in the same list, in the same shape, as one it
+        // was confident of.
         const outcome = rankResults(segmentsFor(1), answersFor([THRESHOLDS.matched - 0.01]));
 
         expect(outcome.ok).toBe(true);
-        if (outcome.ok) expect(outcome.status).toBe("uncertain");
+        if (outcome.ok) {
+            expect(outcome.status).toBe("uncertain");
+            expect(outcome.results).toEqual([]);
+        }
     });
 
-    it("classifies as uncertain at exactly the uncertain threshold", () => {
+    it("classifies as uncertain at exactly the uncertain threshold, and offers nothing", () => {
         const outcome = rankResults(segmentsFor(1), answersFor([THRESHOLDS.uncertain]));
 
         expect(outcome.ok).toBe(true);
-        if (outcome.ok) expect(outcome.status).toBe("uncertain");
+        if (outcome.ok) {
+            expect(outcome.status).toBe("uncertain");
+            expect(outcome.results).toEqual([]);
+        }
+    });
+
+    it("offers only the passages at or above the matched threshold, never the near misses beside them", () => {
+        const outcome = rankResults(segmentsFor(3), answersFor([0.9, THRESHOLDS.matched - 0.01, 0.4]));
+
+        expect(outcome.ok).toBe(true);
+        if (outcome.ok) {
+            expect(outcome.status).toBe("matched");
+            expect(outcome.results).toHaveLength(1);
+            expect(outcome.results[0].relevantProbability).toBe(0.9);
+            // The near misses are still reported as judgements, for the extracted-text view.
+            expect(outcome.evaluations).toHaveLength(3);
+        }
     });
 
     it("classifies as no match below the uncertain threshold", () => {

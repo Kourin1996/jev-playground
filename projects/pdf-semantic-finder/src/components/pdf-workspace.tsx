@@ -85,26 +85,6 @@ const LOAD_ERROR_TEXT: Record<string, string> = {
     InvalidPDFException: "This file could not be read as a PDF.",
 };
 
-/**
- * The segments a passage's `contextBefore` / `contextAfter` were taken from.
- *
- * `buildSegments` builds both from the adjacent groups on the same physical page, so the neighbour
- * is recoverable from position and nothing extra has to travel to the Worker and back.
- */
-const neighbourContext = (segments: readonly PdfSegment[], segment: PdfSegment): Pick<SearchHit, "contextBefore" | "contextAfter"> => {
-    const index = segments.indexOf(segment);
-    const sameDocumentPage = (candidate: PdfSegment | undefined) =>
-        candidate !== undefined && candidate.pageNumber === segment.pageNumber ? candidate : undefined;
-
-    const before = segment.contextBefore === undefined ? undefined : sameDocumentPage(segments[index - 1]);
-    const after = segment.contextAfter === undefined ? undefined : sameDocumentPage(segments[index + 1]);
-
-    return {
-        ...(before === undefined ? {} : { contextBefore: { segmentId: before.id, text: before.originalText } }),
-        ...(after === undefined ? {} : { contextAfter: { segmentId: after.id, text: after.originalText } }),
-    };
-};
-
 export const PdfWorkspace = () => {
     const [loaded, setLoaded] = useState<LoadedDocument | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -215,6 +195,9 @@ export const PdfWorkspace = () => {
             currentRequestIdRef.current = "";
 
             setNarrowPane("document");
+            // A new document is opened to be read, not to have its extraction inspected — and the
+            // view that was open belonged to the document being replaced.
+            setShowExtractedText(false);
 
             const previous = loaded;
             setLoaded(null);
@@ -375,7 +358,6 @@ export const PdfWorkspace = () => {
                         previewText: segment.originalText,
                         segmentId: segment.id,
                         judgement: record,
-                        ...neighbourContext(loaded.segments, segment),
                     }));
 
             try {
@@ -450,34 +432,6 @@ export const PdfWorkspace = () => {
             }
         },
         [loaded, query, resetSearchState],
-    );
-
-    /**
-     * Opens a passage the reader reached through another result's context.
-     *
-     * It becomes the selected result rather than a search of its own: nothing is re-evaluated, and
-     * the status and the rest of the list stay as the search left them. Its own neighbours travel
-     * with it, so the reader can keep walking the document from there.
-     */
-    const openSegment = useCallback(
-        (segmentId: string) => {
-            if (loaded === null) return;
-            const segment = loaded.segments.find((candidate) => candidate.id === segmentId);
-            if (segment === undefined) return;
-
-            const hit: SearchHit = {
-                key: segment.id,
-                pageNumber: segment.pageNumber,
-                ranges: segment.ranges,
-                previewText: segment.originalText,
-                segmentId: segment.id,
-                ...neighbourContext(loaded.segments, segment),
-            };
-
-            setResults((current) => (current.some((entry) => entry.key === hit.key) ? current : [...current, hit]));
-            selectResult(hit.key);
-        },
-        [loaded],
     );
 
     /**
@@ -701,10 +655,11 @@ export const PdfWorkspace = () => {
                                     locationErrorMessage={highlightMessage}
                                     unsearchedPages={unsearchedPages}
                                     unsupportedLayoutPages={unsupportedLayoutPages}
-                                    onOpenSegment={openSegment}
                                     mode={submitted?.mode ?? mode}
                                     query={submitted?.query ?? ""}
                                     progress={progress}
+                                    isShowingExtractedText={showExtractedText}
+                                    onToggleExtractedText={() => setShowExtractedText((value) => !value)}
                                 />
                             </aside>
 
@@ -819,16 +774,7 @@ export const PdfWorkspace = () => {
                                         </div>
                                     )}
                                 </div>
-                                <div className="flex flex-wrap items-center justify-between gap-2 bg-secondary px-5 py-2.5">
-                                    {/*
-                                     * The debug view sits with the viewer it replaces rather than
-                                     * beside Open PDF, which separates what a reader does from
-                                     * what someone working on the extraction does.
-                                     */}
-                                    <Button size="sm" color="tertiary" onClick={() => setShowExtractedText((value) => !value)}>
-                                        {showExtractedText ? "Hide extracted text" : "View extracted text"}
-                                    </Button>
-
+                                <div className="flex flex-wrap items-center justify-end gap-2 bg-secondary px-5 py-2.5">
                                     <div className="flex items-center gap-2">
                                         {/* Which page the reader is on, which the scroll position alone does not say. */}
                                         <span className="text-sm text-tertiary tabular-nums">

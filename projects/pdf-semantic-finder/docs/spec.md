@@ -97,7 +97,6 @@ The page has a top search area, a results panel on the left, and a PDF viewer on
 | Select Meaning                     | Send all searchable segments to the application API for Jev evaluation                                                                                                                                                                                                 |
 | Select Exact text                  | Search locally; do not call Jev                                                                                                                                                                                                                                        |
 | Select a result                    | Scroll the passage itself into view on its physical page; highlight the segment for a meaning result, or the matched characters for an exact one                                                                                                                       |
-| Expand a result's context          | Show the neighbouring passages that were sent with it, and open either of them. Labelled as what was sent, never as what the model used — the response does not report which context influenced the answer                                                             |
 | Select Previous or Next            | Move through existing results without another API call. The controls sit at the head of the list, beside the result count, which is always the whole count                                                                                                             |
 | Edit the query without searching   | Keep the results already on screen, still described by the query that produced them — never re-annotated against text nobody searched for                                                                                                                              |
 | Select a passage mid-search        | Keep that passage selected as later batches re-rank the list, and when the final ranking arrives                                                                                                                                                                       |
@@ -295,14 +294,14 @@ These are application limits, not official TypeSafe AI limits. Retry rate-limit 
 
 Use the probability assigned to level 2 as the primary ranking value. Initial thresholds are hypotheses to calibrate with the fixed Japanese evaluation set.
 
-| Condition                                          | State        | UI behavior                                                                                                |
-| -------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------- |
-| Any segment has `P(level 2) >= 0.65`               | `matched`    | Show up to three qualifying results and open the highest ranked                                            |
-| No normal result, but any has `P(level 2) >= 0.35` | `uncertain`  | Show up to three uncertain results and open the highest ranked, with the uncertainty stated above the list |
-| Every segment has `P(level 2) < 0.35`              | `no_match`   | Say that nothing met the relevance threshold — never that the document has no answer                       |
-| Any segment is unevaluated or invalid              | Search error | Show “The search could not be completed”                                                                   |
+| Condition                                          | State        | UI behavior                                                                          |
+| -------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------ |
+| Any segment has `P(level 2) >= 0.65`               | `matched`    | Show up to three qualifying results and open the highest ranked                      |
+| No normal result, but any has `P(level 2) >= 0.35` | `uncertain`  | Offer **no** passage; say one came close to the threshold without meeting it         |
+| Every segment has `P(level 2) < 0.35`              | `no_match`   | Say that nothing met the relevance threshold — never that the document has no answer |
+| Any segment is unevaluated or invalid              | Search error | Show “The search could not be completed”                                             |
 
-Sort by level-2 probability descending, weighted score descending, then physical page and segment order ascending. Never pad the list with weaker results.
+Sort by level-2 probability descending, weighted score descending, then physical page and segment order ascending. Never pad the list with weaker results, and never offer a passage below the matched threshold: a near miss arriving in the same list, in the same shape, as a confident match is not something a warning above the list repairs.
 
 An empty result never claims the document has no answer, and the two modes mean different things by it: exact search found no such characters, while meaning search evaluated every passage and none reached the threshold. Both add that text inside images was never searched, because OCR is not run. The top three do not guarantee complete coverage.
 
@@ -939,10 +938,13 @@ measured in the client and shown in the status bar. They are durations only and 
 
 Two behaviours were changed on review, after being implemented as originally written.
 
-**Uncertain results now open.** §7 previously said uncertain results must not be navigated to. A
-reader who presses Search has asked to be taken to the passage, and the note above the list already
-states that the results may only be related. The table above now says so, and the earlier wording is
-recorded here so the change is visible rather than silent.
+**Uncertain results, twice reconsidered.** §7 originally said an uncertain result must not be
+navigated to. That was changed on review to "show it and open it, under a note" — a reader who
+presses Search has asked to be taken to a passage. It has since been changed again, and further
+than either: an uncertain passage is **not offered at all** (§14.27). The note above the list was
+the wrong place to carry the caveat, because by the time it matters the reader has already followed
+the result to its page and read it. Both earlier positions are recorded here so the movement is
+visible rather than silent.
 
 **The disclosure is no longer a dialog.** §10 previously required an explicit continue action before
 the first meaning search of each document. The notice is now persistent next to the mode selector
@@ -1333,3 +1335,27 @@ end of the mounted window and checks the next result is selected and highlighted
 No virtualisation library was added. The measured problem is the cost of mounting thousands of cards
 at once, and growing the list solves it; a sliding window over variable-height rows would buy a
 memory bound nothing has asked for yet.
+
+### 14.27 Four changes to what the panel offers and where its controls live
+
+**A near miss is no longer a candidate.** `uncertain` used to mean "show these three anyway, under a
+warning". That put a passage the model was unsure about in the same list, in the same shape, as one
+it was confident of — and by the time the warning matters the reader has already followed the result
+to its page and read it. The state survives, because "nothing qualified but something was close" is
+worth saying and is more use than silence; what does not survive is handing over the near miss. The
+near misses are still reported as judgements, so the extracted-text view still shows what every
+passage was scored.
+
+**The context disclosure is gone.** §6.3 still sends each passage's neighbours, and §14.5 still
+explains why; what has been removed is the control in the results panel that revealed them. The
+reason it was added — that a clause whose limit lives next door cannot be read from the target alone
+— is answered by the viewer itself: selecting a result scrolls the passage into the middle of the
+page it is on, with its neighbours around it, which is the document rather than a summary of it. The
+debug view in §3 still lists the context each passage was sent with.
+
+**The extracted-text control moved into the results panel**, under the model-judgment line. It
+describes the search — what each passage was judged to be, most of all — rather than the document,
+and it now sits with the rest of what is said about the search instead of beside the zoom controls.
+
+**Opening another PDF closes it.** The extraction on screen belonged to the document being replaced,
+so the new one used to arrive behind a debug view of the old one.

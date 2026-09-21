@@ -365,17 +365,18 @@ test.describe("viewer", () => {
         expect([...new Set(scales)]).toEqual([expected]);
     });
 
-    test("an uncertain search opens its highest ranked result and says it is uncertain", async ({ page }) => {
+    test("an uncertain search offers no passage, and says one came close", async ({ page }) => {
+        // §7: a passage below the matched threshold is not a candidate. It used to arrive in the
+        // same list, in the same shape, as one the model was confident of, under a note the reader
+        // had already passed by the time it mattered.
         await openFixture(page);
-        const [target] = await firstSegmentIds(page, 1);
 
-        await page.route("**/api/search", respondWith([target], "uncertain"));
+        await page.route("**/api/search", respondWith([], "uncertain"));
         await searchMeaning(page, "解約の条件について");
 
-        await expect(page.locator("ol li")).toHaveCount(1);
-        await expect(page.getByText("may be related")).toBeVisible();
-        await expect(page.locator(".pdf-finder-highlight").first()).toBeVisible();
-        await expect(page.locator("ol li button[aria-current='true']")).toHaveCount(1);
+        await expect(page.locator("ol li")).toHaveCount(0);
+        await expect(page.locator(".pdf-finder-highlight")).toHaveCount(0);
+        await expect(page.getByText("came close to the relevance threshold")).toBeVisible();
     });
 
     test("a matched search opens the highest ranked result", async ({ page }) => {
@@ -734,6 +735,37 @@ test.describe("viewer", () => {
             await expect(page.locator("ol li")).toHaveCount(0);
             await expect(page.locator(".pdf-finder-highlight")).toHaveCount(0);
         });
+    });
+
+    test("keeps the extracted-text control with the results, not with the viewer", async ({ page }) => {
+        await openFixture(page);
+        const [target] = await firstSegmentIds(page, 1);
+        await page.route("**/api/search", respondWith([target]));
+        await searchMeaning(page, "解約の条件について");
+
+        // It belongs with the things said *about* the search — what each passage was judged to be
+        // most of all — rather than with the controls for reading the document.
+        await expect(page.locator("aside").getByRole("button", { name: "View extracted text" })).toBeVisible();
+        await expect(
+            page
+                .locator("section")
+                .first()
+                .getByRole("button", { name: /extracted text/u }),
+        ).toHaveCount(0);
+    });
+
+    test("returns to the document when another PDF is opened", async ({ page }) => {
+        // The extracted text on screen belongs to the document being replaced. Leaving it up meant
+        // the new document arrived behind a debug view of the old one's extraction.
+        await openFixture(page);
+        await page.getByRole("button", { name: "View extracted text" }).click();
+        await expect(page.getByRole("button", { name: "Hide extracted text" })).toBeVisible();
+
+        await page.setInputFiles('input[type="file"]', FIXTURE);
+        await page.waitForSelector(".pdf-finder-page");
+
+        await expect(page.getByRole("button", { name: "View extracted text" })).toBeVisible();
+        await expect(page.locator("article header")).toHaveCount(0);
     });
 
     test("states what meaning search sends, without a dialog to dismiss", async ({ page }) => {

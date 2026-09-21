@@ -55,16 +55,25 @@ export const rankResults = (segments: readonly RequestSegment[], answers: Readon
     });
 
     const qualifying = ranked.filter((record) => record.relevantProbability >= THRESHOLDS.matched);
-    const uncertain = ranked.filter((record) => record.relevantProbability >= THRESHOLDS.uncertain);
+    const nearMisses = ranked.filter((record) => record.relevantProbability >= THRESHOLDS.uncertain);
 
-    // The list is never padded with weaker results.
-    const status: SearchStatus = qualifying.length > 0 ? "matched" : uncertain.length > 0 ? "uncertain" : "no_match";
-    const selected = status === "matched" ? qualifying : status === "uncertain" ? uncertain : [];
+    /*
+     * A passage below the matched threshold is not offered as a candidate.
+     *
+     * `uncertain` used to mean "show these three anyway, with a warning". That put a passage the
+     * model was unsure about in the same list, in the same shape, as one it was confident of — and
+     * a reader who follows a result to its page has already spent the time by the point the warning
+     * matters. The state survives, because "nothing qualified but something was close" is worth
+     * saying; what does not survive is presenting the near miss as an answer.
+     *
+     * The list is never padded with weaker results either.
+     */
+    const status: SearchStatus = qualifying.length > 0 ? "matched" : nearMisses.length > 0 ? "uncertain" : "no_match";
 
     return {
         ok: true,
         status,
-        results: selected.slice(0, LIMITS.maxResults),
+        results: qualifying.slice(0, LIMITS.maxResults),
         // `records` follows `segments`, which arrives in document order; `ranked` is a sorted copy.
         evaluations: records,
         evaluatedSegmentCount: segments.length,

@@ -61,9 +61,10 @@ export const outcomeOfSettledPanel = (bodyText: string, statusCode: number): Sea
     if (statusCode !== 200) return { kind: "error", code: `http_${statusCode}` };
 
     if (/The search could not be completed/u.test(bodyText)) return { kind: "error", code: "stream_error" };
-    if (/met the relevance threshold/u.test(bodyText)) return { kind: "final", status: "no_match" };
-    // `uncertain` shows its results under a note; `matched` shows the same list without one.
-    if (/may be related/u.test(bodyText)) return { kind: "final", status: "uncertain" };
+    // §7: a near miss is not offered, so `uncertain` and `no_match` both show an empty panel and
+    // are told apart by what it says. `matched` is the only state with a list.
+    if (/came close to the relevance threshold/u.test(bodyText)) return { kind: "final", status: "uncertain" };
+    if (/met the relevance threshold|No matching text was found/u.test(bodyText)) return { kind: "final", status: "no_match" };
     if (/\d+ results?\b/u.test(bodyText)) return { kind: "final", status: "matched" };
 
     return { kind: "unreadable", reason: "no_verdict_on_screen" };
