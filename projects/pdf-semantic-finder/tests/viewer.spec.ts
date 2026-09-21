@@ -156,23 +156,26 @@ test.describe("viewer", () => {
     const respondWith =
         (results: string[], status = "matched") =>
         async (route: Route) => {
-            const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string };
+            const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string; segments: { id: string }[] };
             await route.fulfill({
-                json: {
-                    documentId: body.documentId,
-                    requestId: body.requestId,
-                    status,
-                    results: results.map((segmentId, index) => ({
-                        segmentId,
-                        score: 1.9 - index * 0.1,
-                        relevantProbability: 0.95 - index * 0.05,
-                        confidence: 0.8,
-                    })),
-                    evaluatedSegmentCount: results.length,
-                    requestCount: 3,
-                    model: "jev-1.13.0",
-                    elapsedMs: 120,
-                },
+                contentType: "application/x-ndjson",
+                body:
+                    JSON.stringify({
+                        type: "final",
+                        documentId: body.documentId,
+                        requestId: body.requestId,
+                        status,
+                        results: results.map((segmentId, index) => ({
+                            segmentId,
+                            score: 1.9 - index * 0.1,
+                            relevantProbability: 0.95 - index * 0.05,
+                            confidence: 0.8,
+                        })),
+                        evaluatedSegmentCount: body.segments.length,
+                        requestCount: 3,
+                        model: "jev-1.13.0",
+                        elapsedMs: 120,
+                    }) + "\n",
             });
         };
 
@@ -396,15 +399,19 @@ test.describe("viewer", () => {
                 // The superseded search answers late and with a stale requestId.
                 await new Promise((resolve) => setTimeout(resolve, 1500));
                 await route.fulfill({
-                    json: {
-                        documentId: "stale-document",
-                        requestId: "stale-request",
-                        status: "matched",
-                        results: [{ segmentId: ids[0], score: 2, relevantProbability: 0.99, confidence: 0.9 }],
-                        evaluatedSegmentCount: 1,
-                        model: "jev-1.13.0",
-                        elapsedMs: 1500,
-                    },
+                    contentType: "application/x-ndjson",
+                    body:
+                        JSON.stringify({
+                            type: "final",
+                            documentId: "stale-document",
+                            requestId: "stale-request",
+                            status: "matched",
+                            results: [{ segmentId: ids[0], score: 2, relevantProbability: 0.99, confidence: 0.9 }],
+                            evaluatedSegmentCount: 1,
+                            requestCount: 1,
+                            model: "jev-1.13.0",
+                            elapsedMs: 1500,
+                        }) + "\n",
                 });
                 return;
             }

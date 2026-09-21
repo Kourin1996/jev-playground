@@ -30,6 +30,20 @@ export type PageIndex = {
     /** For each code point of `searchText`, the half-open range of `originalText` it folded from. */
     sourceStart: number[];
     sourceEnd: number[];
+    /**
+     * For each UTF-16 code *unit* of `searchText`, the index of the code point it belongs to.
+     *
+     * Everything else in this module is indexed by code point, because a `TextRange` offset has to
+     * survive a surrogate pair. `String.prototype.indexOf` does not play along: it returns a
+     * code-unit offset, and `.length` counts code units. Feeding one of those straight into
+     * `sourceStart` read the wrong entry for every match after the first supplementary character
+     * on the page — a wrong highlight, or, when the index ran past the end, a result with no range
+     * and an empty preview for text the document plainly contained.
+     *
+     * Built once with the rest of the index rather than per match: converting by slicing the
+     * prefix for each hit would make a frequent query quadratic in the page.
+     */
+    codePointIndexByUnit: number[];
 };
 
 export type PageMatch = {
@@ -38,7 +52,7 @@ export type PageMatch = {
     ranges: TextRange[];
     /** The matched text with a little of its surroundings, for the results list. */
     previewText: string;
-    /** Start offset in the page's `searchText`, so two matches can be told apart. */
+    /** Code-point offset in the page's `searchText`, so two matches can be told apart. */
     searchStart: number;
 };
 
@@ -80,7 +94,29 @@ export const buildPageIndex = (pageNumber: number, lines: readonly ExtractedLine
     const originalText = characters.join("");
     const { text: searchText, sourceStart, sourceEnd } = normalizeWithOffsets(originalText);
 
-    return { pageNumber, originalText, itemIndexByCharacter, offsetInItem, searchText, sourceStart, sourceEnd };
+    return {
+        pageNumber,
+        originalText,
+        itemIndexByCharacter,
+        offsetInItem,
+        searchText,
+        sourceStart,
+        sourceEnd,
+        codePointIndexByUnit: mapUnitsToCodePoints(searchText),
+    };
+};
+
+/** One entry per UTF-16 code unit; a surrogate pair contributes its code-point index twice. */
+const mapUnitsToCodePoints = (text: string): number[] => {
+    const byUnit: number[] = [];
+    let codePoint = 0;
+
+    for (const character of text) {
+        for (let unit = 0; unit < character.length; unit += 1) byUnit.push(codePoint);
+        codePoint += 1;
+    }
+
+    return byUnit;
 };
 
 export const buildPageIndexes = (pages: readonly { pageNumber: number; lines: ExtractedLine[] }[]): PageIndex[] =>
@@ -106,10 +142,15 @@ export const findMatchesOnPage = (index: PageIndex, normalizedQuery: string): Pa
 
         const end = start + normalizedQuery.length;
 
+        // Back into code points before touching either offset array. `indexOf` and `.length` deal
+        // in UTF-16 units; every index in this module is a code point.
+        const firstMatched = index.codePointIndexByUnit[start];
+        const lastMatched = index.codePointIndexByUnit[end - 1];
+
         // The matched characters, in source order, grouped into one range per item. Keeping the
         // offsets is what lets two occurrences inside a single item highlight differently.
-        const firstOriginal = index.sourceStart[start];
-        const lastOriginal = index.sourceEnd[end - 1];
+        const firstOriginal = index.sourceStart[firstMatched];
+        const lastOriginal = index.sourceEnd[lastMatched];
         const ranges: TextRange[] = [];
 
         for (let offset = firstOriginal; offset < lastOriginal; offset += 1) {
@@ -137,7 +178,7 @@ export const findMatchesOnPage = (index: PageIndex, normalizedQuery: string): Pa
                 (previewStart > 0 ? "…" : "") +
                 originalCharacters.slice(previewStart, previewEnd).join("").replace(/\s+/gu, " ").trim() +
                 (previewEnd < originalCharacters.length ? "…" : ""),
-            searchStart: start,
+            searchStart: firstMatched,
         });
 
         from = end;

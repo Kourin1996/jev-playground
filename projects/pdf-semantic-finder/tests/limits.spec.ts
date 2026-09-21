@@ -50,17 +50,21 @@ test.describe("declared limits", () => {
 
     test("says which pages could not be searched when nothing was found", async ({ page }) => {
         await page.route("**/api/search", async (route) => {
-            const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string };
+            const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string; segments: { id: string }[] };
             await route.fulfill({
-                json: {
-                    documentId: body.documentId,
-                    requestId: body.requestId,
-                    status: "no_match",
-                    results: [],
-                    evaluatedSegmentCount: 2,
-                    model: "jev-1.13.0",
-                    elapsedMs: 10,
-                },
+                contentType: "application/x-ndjson",
+                body:
+                    JSON.stringify({
+                        type: "final",
+                        documentId: body.documentId,
+                        requestId: body.requestId,
+                        status: "no_match",
+                        results: [],
+                        evaluatedSegmentCount: body.segments.length,
+                        requestCount: 1,
+                        model: "jev-1.13.0",
+                        elapsedMs: 10,
+                    }) + "\n",
             });
         });
 
@@ -164,17 +168,21 @@ test.describe("declared limits", () => {
 
     test("says the layout was not fully understood when a search finds nothing", async ({ page }) => {
         await page.route("**/api/search", async (route) => {
-            const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string };
+            const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string; segments: { id: string }[] };
             await route.fulfill({
-                json: {
-                    documentId: body.documentId,
-                    requestId: body.requestId,
-                    status: "no_match",
-                    results: [],
-                    evaluatedSegmentCount: 2,
-                    model: "jev-1.13.0",
-                    elapsedMs: 10,
-                },
+                contentType: "application/x-ndjson",
+                body:
+                    JSON.stringify({
+                        type: "final",
+                        documentId: body.documentId,
+                        requestId: body.requestId,
+                        status: "no_match",
+                        results: [],
+                        evaluatedSegmentCount: body.segments.length,
+                        requestCount: 1,
+                        model: "jev-1.13.0",
+                        elapsedMs: 10,
+                    }) + "\n",
             });
         });
 
@@ -200,20 +208,24 @@ test.describe("declared limits", () => {
                 segments: Array<{ id: string }>;
             };
             await route.fulfill({
-                json: {
-                    documentId: body.documentId,
-                    requestId: body.requestId,
-                    status: "matched",
-                    results: body.segments.slice(0, 3).map((segment, index) => ({
-                        segmentId: segment.id,
-                        score: 2 - index * 0.1,
-                        relevantProbability: 0.95 - index * 0.05,
-                        confidence: 0.9,
-                    })),
-                    evaluatedSegmentCount: body.segments.length,
-                    model: "jev-1.13.0",
-                    elapsedMs: 1,
-                },
+                contentType: "application/x-ndjson",
+                body:
+                    JSON.stringify({
+                        type: "final",
+                        documentId: body.documentId,
+                        requestId: body.requestId,
+                        status: "matched",
+                        results: body.segments.slice(0, 3).map((segment, index) => ({
+                            segmentId: segment.id,
+                            score: 2 - index * 0.1,
+                            relevantProbability: 0.95 - index * 0.05,
+                            confidence: 0.9,
+                        })),
+                        evaluatedSegmentCount: body.segments.length,
+                        requestCount: 1,
+                        model: "jev-1.13.0",
+                        elapsedMs: 1,
+                    }) + "\n",
             });
         });
 

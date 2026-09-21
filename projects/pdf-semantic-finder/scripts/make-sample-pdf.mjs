@@ -164,6 +164,30 @@ const DOCUMENTS = [
         },
     },
     {
+        /*
+         * Supplementary-plane characters, for the offset arithmetic exact search depends on.
+         *
+         * `𠮟` is one code point and two UTF-16 units. `indexOf` and `.length` deal in units while
+         * every offset in the extraction is a code point, so one of these characters used to shift
+         * every match after it — the highlight landed on the wrong characters, or the hit came back
+         * with no range at all for text the document plainly contained.
+         *
+         * The phrase is repeated so the viewer also has to pick the right occurrence, and the
+         * document is fictional.
+         */
+        name: "sample-supplementary-ja.pdf",
+        source: async () =>
+            html(
+                STYLE("11pt", "1.9", "20mm"),
+                [
+                    "<p>第1条（懲戒）会社は、𠮟責のうえ返金を行うことがある。</p>",
+                    "<p>第2条（返金）前条の返金は、𠮟責の記録とともに保管する。</p>",
+                    "<p>第3条（適用）𠮟責を伴わない返金についても本規程を適用する。</p>",
+                    "<p>この文書は架空のものであり、実在する企業、製品、規程とは一切関係がありません。</p>",
+                ].join(""),
+            ),
+    },
+    {
         // Spec §10: a document PDF.js can open but that yields no text at all.
         name: "sample-no-text.pdf",
         source: async () =>

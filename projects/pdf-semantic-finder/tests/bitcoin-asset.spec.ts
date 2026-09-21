@@ -101,15 +101,19 @@ test.describe("assets/bitcoin.pdf", () => {
         await page.route("**/api/search", async (route: Route) => {
             const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string; segments: unknown[] };
             await route.fulfill({
-                json: {
-                    documentId: body.documentId,
-                    requestId: body.requestId,
-                    status: "no_match",
-                    results: [],
-                    evaluatedSegmentCount: body.segments.length,
-                    model: "jev-1.13.0",
-                    elapsedMs: 1,
-                },
+                contentType: "application/x-ndjson",
+                body:
+                    JSON.stringify({
+                        type: "final",
+                        documentId: body.documentId,
+                        requestId: body.requestId,
+                        status: "no_match",
+                        results: [],
+                        evaluatedSegmentCount: body.segments.length,
+                        requestCount: 1,
+                        model: "jev-1.13.0",
+                        elapsedMs: 1,
+                    }) + "\n",
             });
         });
 
@@ -149,15 +153,19 @@ test.describe("assets/bitcoin.pdf", () => {
             const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string; segments: Array<{ id: string }> };
             const wanted = new URL(route.request().url()).searchParams.get("segment") ?? body.segments[0].id;
             await route.fulfill({
-                json: {
-                    documentId: body.documentId,
-                    requestId: body.requestId,
-                    status: "matched",
-                    results: [{ segmentId: wanted, score: 2, relevantProbability: 0.97, confidence: 0.9 }],
-                    evaluatedSegmentCount: 1,
-                    model: "jev-1.13.0",
-                    elapsedMs: 1,
-                },
+                contentType: "application/x-ndjson",
+                body:
+                    JSON.stringify({
+                        type: "final",
+                        documentId: body.documentId,
+                        requestId: body.requestId,
+                        status: "matched",
+                        results: [{ segmentId: wanted, score: 2, relevantProbability: 0.97, confidence: 0.9 }],
+                        evaluatedSegmentCount: body.segments.length,
+                        requestCount: 1,
+                        model: "jev-1.13.0",
+                        elapsedMs: 1,
+                    }) + "\n",
             });
         });
 
@@ -166,17 +174,21 @@ test.describe("assets/bitcoin.pdf", () => {
         for (const id of ids) {
             await page.unroute("**/api/search");
             await page.route("**/api/search", async (route: Route) => {
-                const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string };
+                const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string; segments: { id: string }[] };
                 await route.fulfill({
-                    json: {
-                        documentId: body.documentId,
-                        requestId: body.requestId,
-                        status: "matched",
-                        results: [{ segmentId: id, score: 2, relevantProbability: 0.97, confidence: 0.9 }],
-                        evaluatedSegmentCount: 1,
-                        model: "jev-1.13.0",
-                        elapsedMs: 1,
-                    },
+                    contentType: "application/x-ndjson",
+                    body:
+                        JSON.stringify({
+                            type: "final",
+                            documentId: body.documentId,
+                            requestId: body.requestId,
+                            status: "matched",
+                            results: [{ segmentId: id, score: 2, relevantProbability: 0.97, confidence: 0.9 }],
+                            evaluatedSegmentCount: body.segments.length,
+                            requestCount: 1,
+                            model: "jev-1.13.0",
+                            elapsedMs: 1,
+                        }) + "\n",
                 });
             });
 
@@ -205,23 +217,27 @@ test.describe("assets/bitcoin.pdf", () => {
             const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string; segments: Array<{ id: string }> };
             evaluatedCount = body.segments.length;
             await route.fulfill({
-                json: {
-                    documentId: body.documentId,
-                    requestId: body.requestId,
-                    status: "matched",
-                    // One result, but a judgement for every segment: a descending ramp, so the
-                    // second segment lands above the matched threshold and was still not returned.
-                    results: [{ segmentId: body.segments[0].id, score: 2, relevantProbability: 0.97, confidence: 0.9 }],
-                    evaluations: body.segments.map((segment, index) => ({
-                        segmentId: segment.id,
-                        score: 2 - index * 0.01,
-                        relevantProbability: Math.max(0, 0.97 - index * 0.01),
-                        confidence: 0.9,
-                    })),
-                    evaluatedSegmentCount: body.segments.length,
-                    model: "jev-1.13.0",
-                    elapsedMs: 1,
-                },
+                contentType: "application/x-ndjson",
+                body:
+                    JSON.stringify({
+                        type: "final",
+                        documentId: body.documentId,
+                        requestId: body.requestId,
+                        status: "matched",
+                        // One result, but a judgement for every segment: a descending ramp, so the
+                        // second segment lands above the matched threshold and was still not returned.
+                        results: [{ segmentId: body.segments[0].id, score: 2, relevantProbability: 0.97, confidence: 0.9 }],
+                        evaluations: body.segments.map((segment, index) => ({
+                            segmentId: segment.id,
+                            score: 2 - index * 0.01,
+                            relevantProbability: Math.max(0, 0.97 - index * 0.01),
+                            confidence: 0.9,
+                        })),
+                        evaluatedSegmentCount: body.segments.length,
+                        requestCount: 1,
+                        model: "jev-1.13.0",
+                        elapsedMs: 1,
+                    }) + "\n",
             });
         });
 
@@ -254,15 +270,19 @@ test.describe("assets/bitcoin.pdf", () => {
             // A segment in the middle of a page, so it has a neighbour on each side.
             const target = body.segments[5];
             await route.fulfill({
-                json: {
-                    documentId: body.documentId,
-                    requestId: body.requestId,
-                    status: "matched",
-                    results: [{ segmentId: target.id, score: 2, relevantProbability: 0.97, confidence: 0.9 }],
-                    evaluatedSegmentCount: body.segments.length,
-                    model: "jev-1.13.0",
-                    elapsedMs: 1,
-                },
+                contentType: "application/x-ndjson",
+                body:
+                    JSON.stringify({
+                        type: "final",
+                        documentId: body.documentId,
+                        requestId: body.requestId,
+                        status: "matched",
+                        results: [{ segmentId: target.id, score: 2, relevantProbability: 0.97, confidence: 0.9 }],
+                        evaluatedSegmentCount: body.segments.length,
+                        requestCount: 1,
+                        model: "jev-1.13.0",
+                        elapsedMs: 1,
+                    }) + "\n",
             });
         });
 
@@ -324,6 +344,7 @@ test.describe("assets/bitcoin.pdf", () => {
                         status: "matched",
                         results: [{ segmentId: segments[9].id, score: 2, relevantProbability: 0.97, confidence: 0.9 }],
                         evaluatedSegmentCount: segments.length,
+                        requestCount: 1,
                         model: "jev-1.13.0",
                         elapsedMs: 5_000,
                     }),

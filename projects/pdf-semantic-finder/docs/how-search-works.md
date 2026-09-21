@@ -798,6 +798,14 @@ the top of its page. A page is taller than the pane at any readable zoom, so scr
 left a clause near its foot off-screen or clipped by the bottom edge — the reader had to hunt for
 the highlight the search had just found for them.
 
+**One place broke the rule, and it took a supplementary character to show it.** Every offset in the
+extraction is a _code point_: `[...text]`, so `𠮟` counts once. `String.prototype.indexOf` and
+`.length` count UTF-16 _units_, so `𠮟` counts twice — and exact search fed one of those straight
+into the code-point arrays. On a page containing one such character, every later match pointed at
+the wrong characters; when the index ran past the end of the array, the result came back with no
+range and an empty preview for text the document plainly contains. The match position is now
+converted before it is used, through a map built once per page.
+
 ## 9. Staleness and failure
 
 A search must never be overwritten by an older one.

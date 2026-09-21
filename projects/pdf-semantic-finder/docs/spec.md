@@ -404,12 +404,19 @@ The Worker validates:
 - context fields, each bounded by the same per-segment limit as the text — context _is_ a neighbouring segment's text, and unbounded it walked straight past the batch budget;
 - aggregate extracted-text limits over target text only, and a 4 MiB request-body limit over everything transmitted, derived in §14.1;
 - one valid Jev answer for every requested segment;
+- every streamed line, in the browser, against the search that asked for it: its identifiers, a
+  known message type, a legal status or error code, bounded numbers, segment IDs that were sent,
+  progress that does not go backwards or exceed the total, and exactly one terminal line with
+  nothing after it. Every rejection is a search error, never a no-match;
 - finite scores and values in their expected ranges;
 - probabilities summing to 1 within a documented floating-point tolerance.
 
 When a new search begins, abort the previous request when possible. Ignore responses whose `documentId` and `requestId` do not match current client state.
 
 The body-size limit is enforced **while the body arrives**, by counting bytes before retaining them and cancelling the stream above the limit — not by measuring a body that has already been buffered and parsed. The distinction is the whole point on a public endpoint: a limit applied after the allocation does not prevent the allocation.
+
+Every streamed line carries `documentId` and `requestId`, error lines included, so the client can
+attribute what it receives rather than trusting the connection it arrived on.
 
 The provider budget lives in one Durable Object holding counters and expiring reservations. It never holds a query, a passage, or a document identifier. A reservation expires after one search deadline, so an invocation that dies cannot hold capacity.
 
@@ -886,7 +893,9 @@ Three modules the §12 tree has no place for:
   `worker/admission/search-budget.ts` — the §9.1 provider budget, its estimate from §14.20's
   measurements, and the Durable Object that holds it;
 - `src/lib/search/semantic-search.ts` — the client for `POST /api/search`, so the abort and
-  staleness handling of §9.3 lives outside the components;
+  staleness handling of §9.3 lives outside the components, and
+  `src/lib/search/validate-stream.ts`, which validates each streamed line the way the Worker
+  validates the provider's;
 - `src/lib/pdf/check-limits.ts` — the §2 and §10 limit checks;
 - `src/components/extracted-text-view.tsx` — the §3 debug view.
 
@@ -1173,3 +1182,28 @@ that the order may still change, and shows a verdict only when the final line ar
 route with a stream, so `tests/search-client.test.ts` covers the client's parsing of a chunked body
 and `tests/call-jev.test.ts` covers the Worker's progress callback, while the two ends meeting is
 verified by the measurement above.
+
+### 14.22 What the client checks in the stream it is given
+
+The client parsed each NDJSON line with `JSON.parse(line) as SearchStreamMessage` — a cast, which
+verifies nothing. Two things followed, both reproduced rather than reasoned about:
+
+```
+{"type":"unexpected", …}      → accepted as a SUCCESSFUL search
+{"type":"progress","documentId":"someone-else", …}  → rendered on screen
+```
+
+The first is the branch structure: anything that was neither `progress` nor `error` fell through to
+the terminal case. The second is where the guard sat — `pdf-workspace.tsx` compared the identifiers
+it had _captured_ against its refs, which is the right check for "is this search still current" and
+no check at all on the line itself.
+
+Both are now validated in `src/lib/search/validate-stream.ts`, in the style
+`worker/search/validate.ts` already uses for inbound provider JSON, with no new dependency. A line
+that fails is a search error and the reader is shown one; it is never a `no_match`, which would
+report a failed search as a statement about the document.
+
+This also made two long-standing inconsistencies visible, which is the usual return on validating a
+boundary: the unit fixtures described a one-segment request answered with `total: 12`, and the
+end-to-end mocks answered a streamed endpoint with a bare JSON object carrying no `type` at all.
+Both had been passing for as long as they had existed.

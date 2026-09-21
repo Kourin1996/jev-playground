@@ -11,6 +11,7 @@ import { buildSearchRequest, requestSemanticSearch } from "@/lib/search/semantic
 import { LIMITS } from "@/lib/types";
 import type { PdfSegment } from "@/lib/types";
 import { block } from "./fixtures/text-items";
+import { coveredText } from "./helpers";
 
 const segmentsFrom = (texts: string[], pageNumber = 1): PdfSegment[] => buildSegments([{ pageNumber, lines: groupItemsIntoLines(block(700, texts)) }]);
 
@@ -134,6 +135,74 @@ describe("exactSearch", () => {
         // Same item, different characters.
         expect(outcome.hits[0].ranges[0].startOffset).toBe(0);
         expect(outcome.hits[1].ranges[0].startOffset).toBe(9);
+    });
+
+    /**
+     * The whole family of defects a supplementary character used to cause.
+     *
+     * `𠮟` is one code point and two UTF-16 units, so `indexOf` and `.length` came back one unit
+     * ahead of the code-point arrays every index in this module is built on. The result was not a
+     * near miss: the highlight landed on the wrong characters, and once the index ran past the end
+     * of the array the hit came back with no range and an empty preview — for text the document
+     * plainly contains.
+     */
+    describe("with a supplementary character on the page", () => {
+        const matchedText = (page: ReturnType<typeof buildPageIndex>, hit: { ranges: { itemIndex: number; startOffset: number; endOffset: number }[] }) =>
+            coveredText(page, hit.ranges);
+
+        it.each([
+            ["before the match", "𠮟責のうえ返金する", "返金"],
+            ["between two matches", "返金は𠮟責のうえ返金する", "返金"],
+            ["immediately before the match", "𠮟責する返金です", "返金"],
+        ])("highlights the right characters with one %s", (_position, text, query) => {
+            const page = buildPageIndex(1, groupItemsIntoLines(block(700, [text])));
+            const outcome = exactSearch([page], query);
+
+            expect(outcome.ok).toBe(true);
+            if (!outcome.ok) return;
+
+            expect(outcome.hits).not.toHaveLength(0);
+            for (const hit of outcome.hits) expect(matchedText(page, hit)).toBe(query);
+        });
+
+        it("finds a match at the very end of the page", () => {
+            // The case that produced `ranges: []` and an empty preview: the converted index ran
+            // one past the end of `sourceEnd`, so nothing was highlighted at all.
+            const page = buildPageIndex(1, groupItemsIntoLines(block(700, ["𠮟責する返金です"])));
+            const outcome = exactSearch([page], "です");
+
+            expect(outcome.ok).toBe(true);
+            if (!outcome.ok) return;
+
+            expect(outcome.hits).toHaveLength(1);
+            expect(outcome.hits[0].ranges).not.toHaveLength(0);
+            expect(matchedText(page, outcome.hits[0])).toBe("です");
+            expect(outcome.hits[0].previewText).toContain("返金です");
+        });
+
+        it("finds the supplementary character itself", () => {
+            const page = buildPageIndex(1, groupItemsIntoLines(block(700, ["返金と𠮟責について"])));
+            const outcome = exactSearch([page], "𠮟責");
+
+            expect(outcome.ok).toBe(true);
+            if (!outcome.ok) return;
+
+            expect(outcome.hits).toHaveLength(1);
+            expect(matchedText(page, outcome.hits[0])).toBe("𠮟責");
+        });
+
+        it("still folds a halfwidth cluster that follows one", () => {
+            // Both mechanisms at once: the fold changes the character count, and the surrogate
+            // pair changes the unit count, so an offset has to survive both.
+            const page = buildPageIndex(1, groupItemsIntoLines(block(700, ["𠮟責のサーヒ\u3099ス条件"])));
+            const outcome = exactSearch([page], "サービス");
+
+            expect(outcome.ok).toBe(true);
+            if (!outcome.ok) return;
+
+            expect(outcome.hits).toHaveLength(1);
+            expect(matchedText(page, outcome.hits[0])).toBe("サーヒ\u3099ス");
+        });
     });
 
     it("returns every occurrence rather than capping at the ranked-result limit", () => {
@@ -320,7 +389,21 @@ describe("buildSearchRequest", () => {
 });
 
 describe("requestSemanticSearch", () => {
-    const request = { documentId: "doc-1", requestId: "req-1", query: "q", segments: [{ id: "p001-s001", text: "本文" }] };
+    /*
+     * These fixtures describe a real search: two segments were sent, so `total` is 2, every result
+     * names one of those two ids, and the terminal line reports both as evaluated. They used to
+     * disagree with each other — a one-segment request answered with `total: 12` — which nothing
+     * noticed, because the client cast the stream to its type instead of checking it.
+     */
+    const request = {
+        documentId: "doc-1",
+        requestId: "req-1",
+        query: "q",
+        segments: [
+            { id: "p001-s001", text: "本文" },
+            { id: "p001-s002", text: "続きの本文" },
+        ],
+    };
     const line = (message: unknown) => `${JSON.stringify(message)}\n`;
     const finalMessage = {
         type: "final",
@@ -329,10 +412,11 @@ describe("requestSemanticSearch", () => {
         status: "matched",
         results: [{ segmentId: "p001-s002", score: 2, relevantProbability: 0.97, confidence: 0.9 }],
         evaluatedSegmentCount: 2,
+        requestCount: 1,
         model: "jev-1.13.0",
         elapsedMs: 10,
     };
-    const progress = (evaluated: number) => ({ type: "progress", documentId: "doc-1", requestId: "req-1", evaluated, total: 12, results: [] });
+    const progress = (evaluated: number) => ({ type: "progress", documentId: "doc-1", requestId: "req-1", evaluated, total: 2, results: [] });
 
     /** A `/api/search` answer delivered a chunk at a time, the way the Worker sends it. */
     const streamed = (chunks: readonly string[]) =>
@@ -350,7 +434,7 @@ describe("requestSemanticSearch", () => {
     it("returns the final line on success", async () => {
         vi.stubGlobal(
             "fetch",
-            vi.fn(async () => streamed([line(progress(4)), line(finalMessage)])),
+            vi.fn(async () => streamed([line(progress(1)), line(finalMessage)])),
         );
 
         const outcome = await requestSemanticSearch(request, new AbortController().signal);
@@ -366,17 +450,17 @@ describe("requestSemanticSearch", () => {
         const seen: number[] = [];
         vi.stubGlobal(
             "fetch",
-            vi.fn(async () => streamed([line(progress(4)), line(progress(8)), line(finalMessage)])),
+            vi.fn(async () => streamed([line(progress(1)), line(progress(2)), line(finalMessage)])),
         );
 
         await requestSemanticSearch(request, new AbortController().signal, (update) => seen.push(update.evaluated));
 
-        expect(seen).toEqual([4, 8]);
+        expect(seen).toEqual([1, 2]);
     });
 
     it("reassembles a line split across chunks", async () => {
         // The body arrives in whatever pieces the network hands over, which need not be lines.
-        const whole = line(progress(4)) + line(finalMessage);
+        const whole = line(progress(1)) + line(finalMessage);
         const cut = Math.floor(whole.length / 3);
         const seen: number[] = [];
         vi.stubGlobal(
@@ -386,7 +470,7 @@ describe("requestSemanticSearch", () => {
 
         const outcome = await requestSemanticSearch(request, new AbortController().signal, (update) => seen.push(update.evaluated));
 
-        expect(seen).toEqual([4]);
+        expect(seen).toEqual([1]);
         expect(outcome.ok).toBe(true);
     });
 
@@ -407,7 +491,12 @@ describe("requestSemanticSearch", () => {
         // as a line. It must still not become a no-match (spec §9.2).
         vi.stubGlobal(
             "fetch",
-            vi.fn(async () => streamed([line(progress(4)), line({ type: "error", error: { code: "incomplete_evaluation", message: "…" } })])),
+            vi.fn(async () =>
+                streamed([
+                    line(progress(1)),
+                    line({ type: "error", documentId: "doc-1", requestId: "req-1", error: { code: "incomplete_evaluation", message: "…" } }),
+                ]),
+            ),
         );
 
         const outcome = await requestSemanticSearch(request, new AbortController().signal);
@@ -421,13 +510,112 @@ describe("requestSemanticSearch", () => {
         // would be reporting a search that never finished.
         vi.stubGlobal(
             "fetch",
-            vi.fn(async () => streamed([line(progress(4))])),
+            vi.fn(async () => streamed([line(progress(1))])),
         );
 
         const outcome = await requestSemanticSearch(request, new AbortController().signal);
 
         expect(outcome.ok).toBe(false);
         if (!outcome.ok) expect(outcome.code).toBe("provider_malformed_response");
+    });
+
+    /**
+     * Lines this client cannot vouch for.
+     *
+     * Every one of these used to be accepted. An unknown `type` fell into the terminal branch and
+     * came back as a **successful** search; a progress line carrying someone else's identifiers was
+     * forwarded to the screen, because the component compared its own captured ids against its refs
+     * rather than the ids inside the message.
+     *
+     * None of them may produce a result, and none may produce `no_match` — a stream that cannot be
+     * trusted says nothing about the document.
+     */
+    describe("rejects a line it cannot vouch for", () => {
+        const cases: ReadonlyArray<[string, unknown]> = [
+            ["an unknown message type", { type: "unexpected", documentId: "doc-1", requestId: "req-1" }],
+            ["a type-less object", { documentId: "doc-1", requestId: "req-1", status: "matched", results: [] }],
+            ["an empty object", {}],
+            ["null", null],
+            ["a bare number", 42],
+            ["progress from another document", { ...progress(1), documentId: "doc-2" }],
+            ["progress from a superseded request", { ...progress(1), requestId: "req-0" }],
+            ["progress past the total", { ...progress(9) }],
+            ["progress with the wrong total", { type: "progress", documentId: "doc-1", requestId: "req-1", evaluated: 1, total: 99, results: [] }],
+            ["a final line for another document", { ...finalMessage, documentId: "doc-2" }],
+            ["a final line that judged fewer segments than were sent", { ...finalMessage, evaluatedSegmentCount: 1 }],
+            ["a final line with an unknown status", { ...finalMessage, status: "probably" }],
+            [
+                "a result naming a segment that was never sent",
+                { ...finalMessage, results: [{ segmentId: "p009-s009", score: 1, relevantProbability: 0.9, confidence: 0.9 }] },
+            ],
+            [
+                "a probability outside its range",
+                { ...finalMessage, results: [{ segmentId: "p001-s001", score: 1, relevantProbability: 1.4, confidence: 0.9 }] },
+            ],
+            [
+                "a score that is not a number",
+                { ...finalMessage, results: [{ segmentId: "p001-s001", score: null, relevantProbability: 0.9, confidence: 0.9 }] },
+            ],
+            ["an error line with an invented code", { type: "error", documentId: "doc-1", requestId: "req-1", error: { code: "made_up", message: "…" } }],
+            [
+                "an error line for another request",
+                { type: "error", documentId: "doc-1", requestId: "req-9", error: { code: "provider_timeout", message: "…" } },
+            ],
+        ];
+
+        it.each(cases)("%s", async (_name, message) => {
+            vi.stubGlobal(
+                "fetch",
+                vi.fn(async () => streamed([line(message)])),
+            );
+
+            const outcome = await requestSemanticSearch(request, new AbortController().signal);
+
+            expect(outcome.ok).toBe(false);
+            if (!outcome.ok) expect(outcome.code).toBe("provider_malformed_response");
+        });
+
+        it("a second terminal line after the first", async () => {
+            // One authoritative answer per search. A stream that keeps talking after it has
+            // finished is a stream whose ordering cannot be relied on at all.
+            vi.stubGlobal(
+                "fetch",
+                vi.fn(async () => streamed([line(finalMessage), line({ ...finalMessage, status: "no_match", results: [] })])),
+            );
+
+            const outcome = await requestSemanticSearch(request, new AbortController().signal);
+
+            // The first terminal line stands; the search is not re-decided by whatever follows.
+            expect(outcome.ok).toBe(true);
+            if (outcome.ok) expect(outcome.response.status).toBe("matched");
+        });
+
+        it("progress that goes backwards", async () => {
+            vi.stubGlobal(
+                "fetch",
+                vi.fn(async () => streamed([line(progress(2)), line(progress(1)), line(finalMessage)])),
+            );
+
+            const outcome = await requestSemanticSearch(request, new AbortController().signal);
+
+            expect(outcome.ok).toBe(false);
+            if (!outcome.ok) expect(outcome.code).toBe("provider_malformed_response");
+        });
+
+        it("shows no provisional result from a stream that then fails validation", async () => {
+            // The reader must not be left looking at a highlighted passage that came out of a
+            // line the client went on to reject.
+            const seen: number[] = [];
+            vi.stubGlobal(
+                "fetch",
+                vi.fn(async () => streamed([line({ ...progress(1), documentId: "doc-2" }), line(finalMessage)])),
+            );
+
+            const outcome = await requestSemanticSearch(request, new AbortController().signal, (update) => seen.push(update.evaluated));
+
+            expect(seen).toEqual([]);
+            expect(outcome.ok).toBe(false);
+        });
     });
 
     it("treats an unreadable body as a malformed response", async () => {

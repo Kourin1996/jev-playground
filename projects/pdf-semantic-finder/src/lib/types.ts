@@ -371,7 +371,7 @@ export type SearchStreamMessage =
           results: SearchResultRecord[];
       }
     | ({ type: "final" } & SearchResponse)
-    | { type: "error"; error: SearchErrorResponse["error"] };
+    | ({ type: "error"; documentId: string; requestId: string } & SearchErrorResponse);
 
 export type SearchResultRecord = {
     segmentId: string;
@@ -440,4 +440,40 @@ export type SearchErrorResponse = {
     };
 };
 
-export const isSearchErrorResponse = (value: unknown): value is SearchErrorResponse => typeof value === "object" && value !== null && "error" in value;
+/** The codes a response may legally carry. Anything else is a malformed response, not a new error. */
+export const SEARCH_ERROR_CODES: readonly SearchErrorCode[] = [
+    "invalid_request",
+    "query_empty",
+    "query_too_long",
+    "segments_empty",
+    "too_many_segments",
+    "duplicate_segment_id",
+    "malformed_segment_id",
+    "segment_text_empty",
+    "segment_text_too_long",
+    "extracted_text_too_long",
+    "request_body_too_large",
+    "rate_limited",
+    "capacity_exhausted",
+    "provider_unavailable",
+    "provider_timeout",
+    "provider_malformed_response",
+    "incomplete_evaluation",
+    "internal_error",
+];
+
+export const isSearchErrorCode = (value: unknown): value is SearchErrorCode =>
+    typeof value === "string" && (SEARCH_ERROR_CODES as readonly string[]).includes(value);
+
+/**
+ * True only for a body that really carries a known error code.
+ *
+ * It used to accept anything with an `error` key, so a response whose code was unrecognised fell
+ * through to whatever the caller did with `payload.error.code` — an arbitrary string presented to
+ * the reader as a search error.
+ */
+export const isSearchErrorResponse = (value: unknown): value is SearchErrorResponse => {
+    if (typeof value !== "object" || value === null || !("error" in value)) return false;
+    const { error } = value as { error: unknown };
+    return typeof error === "object" && error !== null && "code" in error && isSearchErrorCode((error as { code: unknown }).code);
+};

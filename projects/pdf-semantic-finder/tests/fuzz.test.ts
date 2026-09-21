@@ -17,6 +17,7 @@ import { packBatches } from "../worker/search/build-jev-request";
 import { rankResults } from "../worker/search/rank-results";
 import { validateJevAnswer, validateSearchRequest } from "../worker/search/validate";
 import type { JevScoreAnswer } from "../worker/search/validate";
+import { coveredText } from "./helpers";
 
 /** Deterministic generator, so a failure is reproducible from its seed. */
 const makeRandom = (seed: number) => {
@@ -117,20 +118,35 @@ describe("normalizeForSearch", () => {
         }
     });
 
-    it("makes exact search find any substring of a page's own normalized text", () => {
+    it("makes exact search find any substring of a page's own normalized text, and point at it", () => {
+        // Finding it was never the hard part. The pool contains `𠮟`, and this test passed
+        // throughout the period when every hit after one of those pointed at the wrong
+        // characters — because it only asked whether a hit existed. It now asks what the hit
+        // covers, which is the property the highlight depends on.
         const random = makeRandom(7);
         const page = makePage(random, 1);
         const lines = groupItemsIntoLines(page.items);
         const index = buildPageIndex(1, lines);
 
         for (let attempt = 0; attempt < 50; attempt += 1) {
-            if (index.searchText.length < 4) break;
-            const start = Math.floor(random() * (index.searchText.length - 3));
-            const needle = index.searchText.slice(start, start + 3);
+            const characters = [...index.searchText];
+            if (characters.length < 4) break;
+
+            const start = Math.floor(random() * (characters.length - 3));
+            const needle = characters.slice(start, start + 3).join("");
             const outcome = exactSearch([index], needle);
 
             expect(outcome.ok).toBe(true);
-            if (outcome.ok) expect(outcome.hits.length).toBeGreaterThan(0);
+            if (!outcome.ok) continue;
+            expect(outcome.hits.length).toBeGreaterThan(0);
+
+            for (const hit of outcome.hits) {
+                // Every hit must carry evidence, and that evidence must normalize back to the
+                // query. A range covering the wrong characters fails here; an empty `ranges`
+                // fails on the first assertion.
+                expect(hit.ranges.length).toBeGreaterThan(0);
+                expect(normalizeForSearch(coveredText(index, hit.ranges))).toBe(needle);
+            }
         }
     });
 

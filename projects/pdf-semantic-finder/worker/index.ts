@@ -176,6 +176,13 @@ const handleSearch = async (request: Request, env: WorkerEnv): Promise<Response>
     const encoder = new TextEncoder();
     let writable = true;
 
+    /**
+     * Writes one NDJSON line.
+     *
+     * Every line carries the document and request identifiers, error lines included: the client
+     * validates what it receives against the search it asked for, and a line it cannot attribute
+     * is a line it has to discard.
+     */
     const emit = (message: SearchStreamMessage): void => {
         if (!writable) return;
         // A reader that navigated away closes the stream; that is ordinary, not an error, and the
@@ -227,14 +234,14 @@ const handleSearch = async (request: Request, env: WorkerEnv): Promise<Response>
                     elapsedMs: Date.now() - startedAt,
                 }),
             );
-            emit({ type: "error", error: { code: outcome.code, message: ERROR_MESSAGES[outcome.code] } });
+            emit({ type: "error", documentId, requestId, error: { code: outcome.code, message: ERROR_MESSAGES[outcome.code] } });
             return;
         }
 
         const ranked = rankResults(segments, outcome.answers);
         if (!ranked.ok) {
             console.error(JSON.stringify({ event: "search_failed", code: ranked.code, model }));
-            emit({ type: "error", error: { code: ranked.code, message: ERROR_MESSAGES[ranked.code] } });
+            emit({ type: "error", documentId, requestId, error: { code: ranked.code, message: ERROR_MESSAGES[ranked.code] } });
             return;
         }
 
@@ -276,7 +283,7 @@ const handleSearch = async (request: Request, env: WorkerEnv): Promise<Response>
     void run()
         .catch((error: unknown) => {
             console.error(JSON.stringify({ event: "search_failed", code: "internal_error", name: (error as Error | undefined)?.name ?? "Error" }));
-            emit({ type: "error", error: { code: "internal_error", message: ERROR_MESSAGES.internal_error } });
+            emit({ type: "error", documentId, requestId, error: { code: "internal_error", message: ERROR_MESSAGES.internal_error } });
         })
         .finally(() => {
             // Returned on every path, including a reader that disconnected mid-stream. The

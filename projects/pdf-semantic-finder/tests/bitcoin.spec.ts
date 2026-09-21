@@ -244,17 +244,21 @@ test.describe("real-world English document", () => {
         expect(target).toBeDefined();
 
         await page.route("**/api/search", async (route: Route) => {
-            const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string };
+            const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string; segments: { id: string }[] };
             await route.fulfill({
-                json: {
-                    documentId: body.documentId,
-                    requestId: body.requestId,
-                    status: "matched",
-                    results: [{ segmentId: target, score: 2, relevantProbability: 0.97, confidence: 0.9 }],
-                    evaluatedSegmentCount: 1,
-                    model: "jev-1.13.0",
-                    elapsedMs: 100,
-                },
+                contentType: "application/x-ndjson",
+                body:
+                    JSON.stringify({
+                        type: "final",
+                        documentId: body.documentId,
+                        requestId: body.requestId,
+                        status: "matched",
+                        results: [{ segmentId: target, score: 2, relevantProbability: 0.97, confidence: 0.9 }],
+                        evaluatedSegmentCount: body.segments.length,
+                        requestCount: 1,
+                        model: "jev-1.13.0",
+                        elapsedMs: 100,
+                    }) + "\n",
             });
         });
 

@@ -4,10 +4,19 @@
  * Not named in spec §12's tree; added so the abort and staleness handling of §9.3 lives outside
  * the components. It owns no state — the caller supplies the identifiers and the signal.
  */
-import type { PdfSegment, SearchErrorCode, SearchRequest, SearchResponse, SearchResultRecord, SearchStreamMessage } from "@/lib/types";
+import { validateStreamMessage } from "@/lib/search/validate-stream";
+import type { PdfSegment, SearchErrorCode, SearchRequest, SearchResponse, SearchResultRecord } from "@/lib/types";
 import { isSearchErrorResponse } from "@/lib/types";
 
 export type SemanticSearchOutcome = { ok: true; response: SearchResponse } | { ok: false; code: SearchErrorCode };
+
+/**
+ * How much unterminated text the reader will hold.
+ *
+ * Generous against a real line — a final message at the segment cap carries 2,000 evaluations —
+ * and finite, so a body that never sends a newline cannot grow this without bound.
+ */
+const MAX_BUFFERED_CHARACTERS = 8 * 1024 * 1024;
 
 /**
  * Builds the request body.
@@ -74,45 +83,88 @@ export const requestSemanticSearch = async (
 
     if (response.body === null) return { ok: false, code: "provider_malformed_response" };
 
+    const expected = {
+        documentId: request.documentId,
+        requestId: request.requestId,
+        segmentIds: new Set(request.segments.map((segment) => segment.id)),
+        total: request.segments.length,
+    };
+    const seen = { evaluated: 0, terminated: false };
+
     const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
     let buffered = "";
     let final: SemanticSearchOutcome | null = null;
+    let malformed = false;
 
-    const consume = (line: string): void => {
-        if (line.trim() === "") return;
+    /**
+     * Validates one line and acts on it.
+     *
+     * Returns false when the stream must stop. Every rejection is a search error: a line this
+     * client cannot vouch for must never become a result, and least of all a `no_match`.
+     */
+    const consume = (line: string): boolean => {
+        if (line.trim() === "") return true;
 
-        let message: SearchStreamMessage;
+        let parsed: unknown;
         try {
-            message = JSON.parse(line) as SearchStreamMessage;
+            parsed = JSON.parse(line);
         } catch {
-            final ??= { ok: false, code: "provider_malformed_response" };
-            return;
+            malformed = true;
+            return false;
         }
 
-        if (message.type === "progress") onProgress?.(message);
-        else if (message.type === "error") final ??= { ok: false, code: message.error.code };
-        else {
-            const { type, ...response } = message;
-            void type;
-            final ??= { ok: true, response };
+        const validated = validateStreamMessage(parsed, expected, seen);
+        if (!validated.ok) {
+            malformed = true;
+            return false;
         }
+
+        const { message } = validated;
+        if (message.type === "progress") {
+            onProgress?.(message);
+            return true;
+        }
+
+        if (message.type === "error") {
+            final = { ok: false, code: message.error.code };
+            return false;
+        }
+
+        const { type, ...body } = message;
+        void type;
+        final = { ok: true, response: body };
+        return false;
     };
 
-    for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
+    try {
+        reading: for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-        buffered += value;
-        let newline = buffered.indexOf("\n");
-        while (newline >= 0) {
-            consume(buffered.slice(0, newline));
-            buffered = buffered.slice(newline + 1);
-            newline = buffered.indexOf("\n");
+            buffered += value;
+            // A stream that never sends a newline would otherwise grow this buffer without bound.
+            if (buffered.length > MAX_BUFFERED_CHARACTERS) {
+                malformed = true;
+                break;
+            }
+
+            let newline = buffered.indexOf("\n");
+            while (newline >= 0) {
+                if (!consume(buffered.slice(0, newline))) break reading;
+                buffered = buffered.slice(newline + 1);
+                newline = buffered.indexOf("\n");
+            }
         }
-    }
-    consume(buffered);
 
-    // A stream that ended without a final line is a search that did not finish, not one that found
-    // nothing.
+        if (final === null && !malformed) consume(buffered);
+    } finally {
+        // Nothing more is wanted, whether the stream ended, failed validation, or answered early.
+        await reader.cancel().catch(() => undefined);
+    }
+
+    if (malformed) return { ok: false, code: "provider_malformed_response" };
+
+    // A stream that ended without a terminal line is a search that did not finish, not one that
+    // found nothing.
     return final ?? { ok: false, code: "provider_malformed_response" };
 };
