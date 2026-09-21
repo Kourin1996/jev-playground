@@ -89,16 +89,26 @@ test.describe("viewer", () => {
     };
 
     const searchExact = async (page: Page, query: string) => {
-        await page.locator('label:has-text("Exact text")').click();
+        await page.getByRole("radio", { name: "Exact text" }).click();
         await page.getByLabel("Search query").fill(query);
-        await page.getByRole("button", { name: "Search" }).click();
+        await page.getByRole("button", { name: "Search", exact: true }).click();
     };
 
-    /** Runs a meaning search, accepting the disclosure the first time it appears. */
     const searchMeaning = async (page: Page, query: string) => {
-        await page.locator('label:has-text("Meaning")').click();
+        await page.getByRole("radio", { name: "Meaning" }).click();
         await page.getByLabel("Search query").fill(query);
-        await page.getByRole("button", { name: "Search" }).click();
+        await page.getByRole("button", { name: "Search", exact: true }).click();
+    };
+
+    /** Steps the zoom ladder until the label reads the requested level. */
+    const setZoom = async (page: Page, target: string) => {
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+            const current = (await page.getByLabel("Zoom level").textContent()) ?? "";
+            if (current === target) return;
+            const direction = Number(current.replace("%", "")) > Number(target.replace("%", "")) ? "Zoom out" : "Zoom in";
+            await page.getByRole("button", { name: direction }).click();
+        }
+        throw new Error(`zoom never reached ${target}`);
     };
 
     const highlightText = (page: Page) => page.locator(".pdf-finder-highlight").evaluateAll((nodes) => nodes.map((node) => node.textContent).join(""));
@@ -159,6 +169,7 @@ test.describe("viewer", () => {
                         confidence: 0.8,
                     })),
                     evaluatedSegmentCount: results.length,
+                    requestCount: 3,
                     model: "jev-1.13.0",
                     elapsedMs: 120,
                 },
@@ -210,6 +221,34 @@ test.describe("viewer", () => {
                 page.evaluate(() => document.querySelector(".pdf-finder-highlight")?.closest(".pdf-finder-page")?.getAttribute("data-page-number") ?? null),
             )
             .toBe(String(expectedPage));
+    });
+
+    test("brings the passage itself into view, not just the top of its page", async ({ page }) => {
+        // Scrolling to the page left a clause near its foot off-screen or clipped by the bottom
+        // edge, so the reader had to hunt for the highlight the search had just found.
+        await openFixture(page);
+        const ids = await firstSegmentIds(page, 8);
+        // The last segment of the first page, which is the one furthest down it.
+        const target = ids.filter((id) => id.startsWith("p001")).at(-1)!;
+
+        await page.route("**/api/search", respondWith([target]));
+        await searchMeaning(page, "解約したらお金は戻りますか");
+        await expect(page.locator(".pdf-finder-highlight").first()).toBeVisible();
+        await page.waitForTimeout(800);
+
+        const placement = await page.evaluate(() => {
+            const node = document.querySelector(".pdf-finder-highlight");
+            const pane = node?.closest(".overflow-y-auto");
+            if (node == null || pane == null) return null;
+            const box = node.getBoundingClientRect();
+            const paneBox = pane.getBoundingClientRect();
+            return { top: box.top - paneBox.top, bottom: paneBox.bottom - box.bottom, height: paneBox.height };
+        });
+
+        expect(placement).not.toBeNull();
+        // Fully inside the pane, with room on both sides rather than jammed against an edge.
+        expect(placement!.top).toBeGreaterThan(placement!.height * 0.2);
+        expect(placement!.bottom).toBeGreaterThan(placement!.height * 0.2);
     });
 
     test("repeated text highlights the occurrence the selected result represents", async ({ page }) => {
@@ -271,12 +310,17 @@ test.describe("viewer", () => {
         await searchMeaning(page, "解約の条件は");
         await expect(page.locator(".pdf-finder-highlight").first()).toBeVisible();
 
+        // The viewer opens fitted to its pane, so 100% has to be selected before it can be the
+        // baseline the spec's zoom levels are measured from.
+        await setZoom(page, "100%");
+        await page.waitForTimeout(500);
+
         const baseline = await highlightPosition(page);
         const spanCount = await page.locator(".pdf-finder-highlight").count();
 
         for (const expectedZoom of ["125%", "150%"]) {
             await page.getByRole("button", { name: "Zoom in" }).click();
-            await expect(page.locator("span.w-14")).toHaveText(expectedZoom);
+            await expect(page.getByLabel("Zoom level")).toHaveText(expectedZoom);
             await page.waitForTimeout(500);
 
             const zoomed = await highlightPosition(page);
@@ -299,18 +343,22 @@ test.describe("viewer", () => {
         await page.goto("/");
         await page.setInputFiles('input[type="file"]', FIXTURE);
         await page.waitForSelector(".pdf-finder-page");
-        await page.getByRole("button", { name: "Zoom in" }).click({ force: true });
+        // Pinned rather than stepped: the fit-to-width scale depends on the window, so stepping
+        // from it would not name a level this assertion could pin.
+        await page.getByRole("button", { name: "Zoom out" }).click({ force: true });
 
         await client.send("Emulation.setCPUThrottlingRate", { rate: 1 });
-        await expect(page.locator("span.w-14")).toHaveText("125%");
+        const settled = await page.getByLabel("Zoom level").textContent();
+        expect(settled).not.toBeNull();
         await page.waitForTimeout(3000);
 
         const scales = await page
             .locator(".pdf-finder-page")
             .evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).getPropertyValue("--scale-factor").trim()));
 
+        const expected = String(Number(settled!.replace("%", "")) / 100);
         expect(scales.length).toBeGreaterThan(0);
-        expect([...new Set(scales)]).toEqual(["1.25"]);
+        expect([...new Set(scales)]).toEqual([expected]);
     });
 
     test("an uncertain search opens its highest ranked result and says it is uncertain", async ({ page }) => {
@@ -408,21 +456,133 @@ test.describe("viewer", () => {
         await expect(page.getByText("No matching text was found")).toHaveCount(0);
     });
 
+    test("shows the model's own judgement on a meaning result and nothing of the kind on an exact one", async ({ page }) => {
+        // §3: the numbers are shown because §14.19 found the same passage crossing all three §7
+        // bands depending on its request. A reader who cannot see them cannot tell a passage the
+        // model was sure of from one that scraped into the list.
+        await openFixture(page);
+        const [target] = await firstSegmentIds(page, 1);
+
+        await page.route("**/api/search", respondWith([target]));
+        await searchMeaning(page, "解約の条件について");
+        await expect(page.locator("ol li")).toHaveCount(1);
+
+        const item = page.locator("ol li").first();
+        // 0.95 and 0.8 are what the mocked provider returned for this passage.
+        await expect(item).toContainText("95%");
+        await expect(item).toContainText("confident");
+        await expect(item).toContainText("certainty 0.80");
+        // Never as a similarity measurement: §3 still forbids "98% match", and the caveat is on
+        // screen in text rather than behind a hover.
+        await expect(page.getByText(/\d+% match/u)).toHaveCount(0);
+        await expect(page.getByText("Model judgment")).toBeVisible();
+        await expect(page.getByText("Not a measured match")).toBeVisible();
+
+        // Exact search produces no judgement, so nothing of the kind may appear.
+        await searchExact(page, "第");
+        await expect(page.locator("ol li").first()).not.toContainText("certainty");
+    });
+
+    test("emphasises only the query terms that literally appear in a passage", async ({ page }) => {
+        await openFixture(page);
+
+        // Exact search: every result contains the query, so every preview carries the emphasis.
+        await searchExact(page, "返還");
+        await expect(page.locator("ol li")).not.toHaveCount(0);
+        await expect(page.locator("ol li mark").first()).toHaveText("返還");
+
+        // A query too short to be a term emphasises nothing rather than the whole passage.
+        await searchExact(page, "第");
+        await expect(page.locator("ol li")).not.toHaveCount(0);
+        await expect(page.locator("ol li mark")).toHaveCount(0);
+
+        // A query whose words appear nowhere emphasises nothing rather than guessing. Exact search
+        // finds no result for it either, so the meaning path supplies the passage.
+        const [target] = await firstSegmentIds(page, 1);
+        await page.route("**/api/search", respondWith([target]));
+        await searchMeaning(page, "ばらの花の育てかた");
+        await expect(page.locator("ol li")).toHaveCount(1);
+        await expect(page.locator("ol li mark")).toHaveCount(0);
+    });
+
+    test("reports what the last meaning search cost, in questions and in requests", async ({ page }) => {
+        await openFixture(page);
+        const [target] = await firstSegmentIds(page, 1);
+        const segmentCount = Number((await page.locator("footer p").textContent())?.match(/(\d+) searchable segments/u)?.[1]);
+
+        await page.route("**/api/search", respondWith([target]));
+        await searchMeaning(page, "解約の条件について");
+
+        // One question per segment, in the number of requests the response declared. The two bill
+        // separately, so neither can be derived from the other.
+        await expect(page.locator("footer p")).toContainText(`${segmentCount} Jev questions in 3 API calls`);
+    });
+
+    test("opens the viewer fitted to its pane, and Fit returns to it after zooming", async ({ page }) => {
+        await openFixture(page);
+
+        const fitted = (await page.getByLabel("Zoom level").textContent()) ?? "";
+        // The pane is wider than a page at 100%, so fitting it is a different number.
+        expect(fitted).not.toBe("100%");
+        await expect(page.getByRole("button", { name: "Fit" })).toHaveAttribute("aria-pressed", "true");
+
+        await setZoom(page, "100%");
+        await expect(page.getByRole("button", { name: "Fit" })).toHaveAttribute("aria-pressed", "false");
+
+        await page.getByRole("button", { name: "Fit" }).click();
+        await expect(page.getByLabel("Zoom level")).toHaveText(fitted);
+    });
+
+    test("names the page currently in view", async ({ page }) => {
+        await openFixture(page);
+        await expect(page.getByText(/^1 \/ \d+$/u)).toBeVisible();
+
+        // Scrolling the viewer, not the window: the pages live in their own scroll container.
+        await page.locator(".pdf-finder-page").nth(1).scrollIntoViewIfNeeded();
+        await expect(page.getByText(/^2 \/ \d+$/u)).toBeVisible();
+    });
+
+    test("the divider resizes the results panel", async ({ page }) => {
+        await openFixture(page);
+
+        const panel = page.locator("aside");
+        const before = (await panel.boundingBox())!.width;
+
+        const divider = page.getByRole("separator", { name: "Resize results panel" });
+        const handle = (await divider.boundingBox())!;
+        await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(handle.x + handle.width / 2 + 80, handle.y + handle.height / 2, { steps: 8 });
+        await page.mouse.up();
+
+        const dragged = (await panel.boundingBox())!.width;
+        expect(dragged).toBeGreaterThan(before + 40);
+
+        // A pointer drag is not an accessible control on its own.
+        await divider.focus();
+        await divider.press("ArrowLeft");
+        expect((await panel.boundingBox())!.width).toBeLessThan(dragged);
+    });
+
     test("states what meaning search sends, without a dialog to dismiss", async ({ page }) => {
         await openFixture(page);
         const [target] = await firstSegmentIds(page, 1);
         await page.route("**/api/search", respondWith([target]));
 
         // Exact search sends nothing, so the notice belongs to the meaning mode only.
-        await page.locator('label:has-text("Exact text")').click();
-        await expect(page.getByText("sends your query and text extracted from the PDF")).toHaveCount(0);
+        await page.getByRole("radio", { name: "Exact text" }).click();
+        await expect(page.getByText("Sends your query and the extracted text to TypeSafe AI.")).toHaveCount(0);
 
-        await page.locator('label:has-text("Meaning")').click();
-        await expect(page.getByText("sends your query and text extracted from the PDF")).toBeVisible();
+        await page.getByRole("radio", { name: "Meaning" }).click();
+        await expect(page.getByText("Sends your query and the extracted text to TypeSafe AI.")).toBeVisible();
+
+        // The full disclosure is one hover away, and says which service and on what condition.
+        await page.getByRole("button", { name: "About meaning search" }).hover();
+        await expect(page.getByText("Use only documents you are permitted to send.")).toBeVisible();
 
         // Nothing has to be acknowledged first.
         await page.getByLabel("Search query").fill("解約について");
-        await page.getByRole("button", { name: "Search" }).click();
+        await page.getByRole("button", { name: "Search", exact: true }).click();
         await expect(page.locator("ol li")).toHaveCount(1);
         await expect(page.getByRole("button", { name: "Continue" })).toHaveCount(0);
     });

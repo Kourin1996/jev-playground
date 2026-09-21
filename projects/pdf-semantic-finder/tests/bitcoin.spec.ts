@@ -33,7 +33,7 @@ test.describe("real-world English document", () => {
     };
 
     const exactSearch = async (page: Page, query: string) => {
-        await page.locator('label:has-text("Exact text")').click();
+        await page.getByRole("radio", { name: "Exact text" }).click();
         await page.getByLabel("Search query").fill(query);
         await page.getByLabel("Search query").press("Enter");
         await page.waitForFunction(
@@ -107,9 +107,9 @@ test.describe("real-world English document", () => {
     test("reports nine pages and stays within every declared limit", async ({ page }) => {
         await open(page);
 
-        const footer = await page.locator("footer p").textContent();
-        expect(footer).toContain(`${PAGE_COUNT} pages`);
-        expect(footer).toMatch(/\d+ searchable segments/u);
+        // Which document is open is stated in the header; what the machine made of it, in the footer.
+        expect(await page.locator("header p").textContent()).toContain(`${PAGE_COUNT} pages`);
+        expect(await page.locator("footer p").textContent()).toMatch(/\d+ searchable segments/u);
 
         // Inside the limits, so search is offered rather than blocked.
         await expect(page.getByLabel("Search query")).toBeEnabled();
@@ -193,12 +193,21 @@ test.describe("real-world English document", () => {
         await exactSearch(page, "Merkle Tree");
         await expect(page.locator(".pdf-finder-highlight").first()).toBeVisible();
 
+        // The viewer opens fitted to its pane, so 100% is selected before measuring.
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+            const current = (await page.getByLabel("Zoom level").textContent()) ?? "";
+            if (current === "100%") break;
+            await page.getByRole("button", { name: Number(current.replace("%", "")) > 100 ? "Zoom out" : "Zoom in" }).click();
+        }
+        await expect(page.getByLabel("Zoom level")).toHaveText("100%");
+        await page.waitForTimeout(500);
+
         const baseline = await highlightPosition(page);
         const spanCount = await page.locator(".pdf-finder-highlight").count();
 
         for (const zoom of ["125%", "150%"]) {
             await page.getByRole("button", { name: "Zoom in" }).click();
-            await expect(page.locator("span.w-14")).toHaveText(zoom);
+            await expect(page.getByLabel("Zoom level")).toHaveText(zoom);
             await page.waitForTimeout(500);
 
             const zoomed = await highlightPosition(page);
@@ -249,9 +258,9 @@ test.describe("real-world English document", () => {
             });
         });
 
-        await page.locator('label:has-text("Meaning")').click();
+        await page.getByRole("radio", { name: "Meaning" }).click();
         await page.getByLabel("Search query").fill("how does the network agree on history");
-        await page.getByRole("button", { name: "Search" }).click();
+        await page.getByRole("button", { name: "Search", exact: true }).click();
 
         await expect(page.locator("ol li")).toHaveCount(1);
         await expect(page.locator(".pdf-finder-highlight").first()).toBeVisible();

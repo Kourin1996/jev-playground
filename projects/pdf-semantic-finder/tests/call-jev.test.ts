@@ -194,6 +194,32 @@ describe("callJevBatches", () => {
         if (!outcome.ok) expect(outcome.code).toBe("provider_unavailable");
     });
 
+    it("reports what is known after each batch, so the reader is not kept waiting", async () => {
+        // A search at the segment cap is 500 round-trips deep and takes about five seconds, while
+        // the first answers come back in under half a second. This callback is what carries them
+        // out, and it must report cumulative progress rather than the batch that just landed.
+        const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+            const body = JSON.parse(init.body as string) as { questions: Record<string, unknown> };
+            return Response.json(okBody(Object.keys(body.questions).map((key) => key.slice(10).replace("_", "-"))));
+        });
+
+        const requests = Array.from({ length: 5 }, (_, index) => requestFor([`p001-s${String(index + 1).padStart(3, "0")}`]));
+        const seen: Array<{ evaluated: number; total: number; answers: number }> = [];
+
+        const outcome = await callJevBatches(requests, {
+            ...dependencies(fetchImpl as never),
+            onProgress: ({ evaluated, total, answers }) => seen.push({ evaluated, total, answers: answers.size }),
+        });
+
+        expect(outcome.ok).toBe(true);
+        expect(seen).toHaveLength(5);
+        // Cumulative, and counted against the number of segments rather than the number of batches.
+        expect(seen.map((entry) => entry.evaluated)).toEqual([1, 2, 3, 4, 5]);
+        expect(new Set(seen.map((entry) => entry.total))).toEqual(new Set([5]));
+        // The map handed over is the live one, so a caller can rank what is known so far.
+        expect(seen.at(-1)?.answers).toBe(5);
+    });
+
     it("runs no more than the configured number of requests at once", async () => {
         let active = 0;
         let peak = 0;

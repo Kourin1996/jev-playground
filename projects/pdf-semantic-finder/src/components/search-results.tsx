@@ -1,13 +1,15 @@
 /**
  * Results panel (spec §3, §7).
  *
- * Shows the physical page number and the original extracted text. No generated explanation and no
- * unsupported precision such as a match percentage.
+ * Shows the physical page number, the original extracted text, and the model's own judgement of the
+ * passage. Still no generated explanation: nothing here is written about the passage, only quoted
+ * from it or reported as the number the provider returned.
  */
 import { ArrowLeft, ArrowRight } from "@untitledui/icons";
 import { Badge } from "@/components/base/badges/badges";
 import { Button } from "@/components/base/buttons/button";
 import type { SearchHit, SearchMode, SearchStatus } from "@/lib/types";
+import { THRESHOLDS } from "@/lib/types";
 import { cx } from "@/utils/cx";
 
 export type SearchResultsProps = {
@@ -33,7 +35,66 @@ export type SearchResultsProps = {
     unsupportedLayoutPages: number[];
     /** Which mode produced this result; an empty result means different things in each. */
     mode: SearchMode;
+    /** The query, so the parts of it that literally appear in a passage can be emphasised. */
+    query: string;
+    /**
+     * How far a meaning search has got, or null when none is running.
+     *
+     * While it is set, the list is whatever currently scores highest and its order is still
+     * changing. No verdict is shown: §7 classifies over every segment, so `no_match` announced
+     * halfway through would be a claim the search has not earned.
+     */
+    progress: { evaluated: number; total: number } | null;
 };
+
+/**
+ * Splits a passage so the parts of the query that literally appear in it can be emphasised.
+ *
+ * Only literal occurrences, never an inference about which words mattered: §3 forbids generated
+ * explanations, and the provider does not report what it read. A Japanese query carries no word
+ * boundaries, so it is matched whole; when nothing matches literally, nothing is emphasised, which
+ * is the honest outcome for a meaning search that found a paraphrase.
+ */
+const emphasise = (text: string, query: string): Array<{ text: string; hit: boolean }> => {
+    const terms = [...new Set(query.split(/[\s、。,.!?！？]+/u).filter((term) => term.length >= 2))].sort((a, b) => b.length - a.length);
+    if (terms.length === 0) return [{ text, hit: false }];
+
+    const parts: Array<{ text: string; hit: boolean }> = [];
+    let rest = text;
+
+    while (rest.length > 0) {
+        const found = terms
+            .map((term) => ({ term, at: rest.toLowerCase().indexOf(term.toLowerCase()) }))
+            .filter((candidate) => candidate.at >= 0)
+            .sort((a, b) => a.at - b.at || b.term.length - a.term.length)[0];
+
+        if (found === undefined) {
+            parts.push({ text: rest, hit: false });
+            break;
+        }
+
+        if (found.at > 0) parts.push({ text: rest.slice(0, found.at), hit: false });
+        parts.push({ text: rest.slice(found.at, found.at + found.term.length), hit: true });
+        rest = rest.slice(found.at + found.term.length);
+    }
+
+    return parts;
+};
+
+/**
+ * How the model's own judgement is shown.
+ *
+ * A number, because hiding it left the reader unable to tell a passage the model was certain about
+ * from one it was guessing at. Labelled as the model's confidence and never as a match percentage:
+ * §14.19 measured the same passage crossing all three bands depending on which other passages
+ * shared its request, so it is a reading rather than a measurement.
+ */
+const judgementTone = (probability: number) =>
+    probability >= THRESHOLDS.matched
+        ? { label: "confident", className: "text-success-primary" }
+        : probability >= THRESHOLDS.uncertain
+          ? { label: "unsure", className: "text-warning-primary" }
+          : { label: "weak", className: "text-quaternary" };
 
 /** "Page 3 could not be searched." / "Pages 3, 4 could not be searched." */
 const describePages = (pages: number[], plural: string, singular = plural): string =>
@@ -70,6 +131,8 @@ export const SearchResults = ({
     unsupportedLayoutPages,
     onOpenSegment,
     mode,
+    query,
+    progress,
 }: SearchResultsProps) => {
     if (!hasDocument) return null;
 
@@ -82,15 +145,44 @@ export const SearchResults = ({
         );
     }
 
-    if (status === null) {
+    // While a meaning search is running there is a list but no verdict, so the progress branch
+    // comes before both the empty-query branch and the empty-result one.
+    const progressNote =
+        progress === null ? null : (
+            <div className="flex flex-col gap-1.5 px-5 pt-1 pb-3">
+                <p className="text-sm text-tertiary">
+                    Reading the document — {progress.evaluated.toLocaleString()} of {progress.total.toLocaleString()} passages judged.
+                </p>
+                <div className="h-1 w-full overflow-hidden rounded-full bg-quaternary">
+                    <div
+                        className="h-full rounded-full bg-brand-solid transition-[width] duration-200 ease-linear motion-reduce:transition-none"
+                        style={{ width: `${Math.round((progress.evaluated / Math.max(1, progress.total)) * 100)}%` }}
+                    />
+                </div>
+                <p className="text-xs text-quaternary">These are the best so far and may still change.</p>
+            </div>
+        );
+
+    if (progress !== null && results.length === 0) return <div className="flex h-full flex-col">{progressNote}</div>;
+
+    if (status === null && progress === null) {
         return (
-            <div className="px-5 py-4">
+            <div className="flex flex-col gap-2 px-5 py-4">
                 <p className="text-sm text-tertiary">Enter a query to search this document.</p>
+                {/*
+                 * The two modes differ enough that a reader who picks the wrong one reads the
+                 * empty result as a statement about the document. Naming both here costs a line
+                 * and is the only place it can be said before the first search.
+                 */}
+                <p className="text-xs text-quaternary">
+                    <span className="font-semibold">Exact text</span> finds the characters you typed. <span className="font-semibold">Meaning</span> asks the
+                    model which passage answers the question, and sends the extracted text to do it.
+                </p>
             </div>
         );
     }
 
-    if (results.length === 0) {
+    if (results.length === 0 && status !== null) {
         return (
             <div className="flex flex-col gap-2 px-5 py-4">
                 {/*
@@ -122,13 +214,60 @@ export const SearchResults = ({
 
     return (
         <div className="flex h-full flex-col">
-            {status !== "matched" && STATUS_NOTE[status] !== null && <p className="px-5 pt-1 pb-3 text-sm text-tertiary">{STATUS_NOTE[status]}</p>}
+            {progressNote}
+            {progress === null && status !== null && status !== "matched" && STATUS_NOTE[status] !== null && (
+                <p className="px-5 pt-1 pb-3 text-sm text-tertiary">{STATUS_NOTE[status]}</p>
+            )}
 
             {locationErrorMessage !== null && (
                 <p className="mx-5 mb-2 rounded-lg bg-warning-primary px-3 py-2 text-sm text-warning-primary">{locationErrorMessage}</p>
             )}
 
-            <ol className="flex flex-1 flex-col gap-2 overflow-y-auto px-3 pb-2">
+            {/*
+             * The count and the arrows sit with the list rather than at the foot of the panel,
+             * where two results left them stranded a screen away from what they move between.
+             */}
+            {/*
+             * What the percentages are, in text that is always on screen.
+             *
+             * It was a `title` tooltip first, which a touch or keyboard reader never sees — so the
+             * only thing they got was a number that looks like a measured match. §14.19 is why the
+             * caveat has to travel with it: the same passage crossed all three §7 bands depending
+             * on which others shared its request.
+             */}
+            {results.some((result) => result.judgement !== undefined) && (
+                <p className="px-6 pt-1 pb-2 text-xs text-quaternary">
+                    <span className="font-semibold text-tertiary">Model judgment</span> — how relevant the model called each passage, and how certain it was.
+                    Not a measured match: both move with the passages the same request carried.
+                </p>
+            )}
+
+            <div className="flex items-center justify-between gap-2 px-6 pt-1 pb-2">
+                <p className="text-xs font-semibold text-tertiary">
+                    {results.length} {results.length === 1 ? "result" : "results"}
+                </p>
+                <div className="flex items-center gap-1">
+                    {/* Moving between existing results never triggers another search. */}
+                    <Button
+                        size="sm"
+                        color="tertiary"
+                        iconLeading={ArrowLeft}
+                        aria-label="Previous"
+                        isDisabled={selectedIndex <= 0}
+                        onClick={() => onSelect(selectedIndex - 1)}
+                    />
+                    <Button
+                        size="sm"
+                        color="tertiary"
+                        iconLeading={ArrowRight}
+                        aria-label="Next"
+                        isDisabled={selectedIndex >= results.length - 1}
+                        onClick={() => onSelect(Math.max(0, selectedIndex + 1))}
+                    />
+                </div>
+            </div>
+
+            <ol className="flex flex-1 flex-col gap-2 overflow-y-auto px-3 pb-3">
                 {results.map((result, index) => (
                     <li key={result.key}>
                         <button
@@ -136,6 +275,8 @@ export const SearchResults = ({
                             onClick={() => onSelect(index)}
                             aria-current={index === selectedIndex}
                             className={cx(
+                                // Selection is carried by the tint alone, which is the same colour
+                                // the passage is highlighted in on the page.
                                 "flex w-full cursor-pointer flex-col gap-1.5 rounded-xl px-3 py-2.5 text-left outline-brand transition duration-100 ease-linear focus-visible:outline-2 focus-visible:outline-offset-1",
                                 index === selectedIndex ? "bg-brand-primary" : "hover:bg-primary_hover",
                             )}
@@ -147,8 +288,36 @@ export const SearchResults = ({
                                 <Badge size="sm" color="gray" type="modern">
                                     Page {result.pageNumber}
                                 </Badge>
+                                {result.judgement !== undefined && (
+                                    <span
+                                        className={cx(
+                                            "ml-auto text-xs font-semibold tabular-nums",
+                                            judgementTone(result.judgement.relevantProbability).className,
+                                        )}
+                                        // Spelled out for anyone who reaches the row through a screen reader, where
+                                        // "95% confident · certainty 0.80" on its own says nothing about whose
+                                        // judgement it is. The heading above the list carries the same caveat in
+                                        // text, so it is not left to a hover.
+                                        aria-label={`Model judgment: ${Math.round(result.judgement.relevantProbability * 100)} per cent relevant, certainty ${result.judgement.confidence.toFixed(2)}`}
+                                    >
+                                        {Math.round(result.judgement.relevantProbability * 100)}%{" "}
+                                        <span className="font-normal">
+                                            {judgementTone(result.judgement.relevantProbability).label} · certainty {result.judgement.confidence.toFixed(2)}
+                                        </span>
+                                    </span>
+                                )}
                             </span>
-                            <span className="line-clamp-4 text-sm text-secondary">{result.previewText}</span>
+                            <span className="line-clamp-4 text-sm text-secondary">
+                                {emphasise(result.previewText, query).map((part, position) =>
+                                    part.hit ? (
+                                        <mark key={position} className="bg-transparent font-semibold text-primary">
+                                            {part.text}
+                                        </mark>
+                                    ) : (
+                                        <span key={position}>{part.text}</span>
+                                    ),
+                                )}
+                            </span>
                         </button>
 
                         {/*
@@ -162,7 +331,7 @@ export const SearchResults = ({
                          */}
                         {index === selectedIndex && (result.contextBefore !== undefined || result.contextAfter !== undefined) && (
                             <details className="px-3 pb-1">
-                                <summary className="cursor-pointer py-1 text-xs text-quaternary select-none">Context sent with this passage</summary>
+                                <summary className="cursor-pointer py-1 text-xs text-quaternary select-none">Show surrounding text</summary>
                                 <div className="flex flex-col gap-1.5 pt-1 pb-1">
                                     {([result.contextBefore, result.contextAfter] as const).map(
                                         (context, position) =>
@@ -185,22 +354,6 @@ export const SearchResults = ({
                     </li>
                 ))}
             </ol>
-
-            <div className="flex items-center justify-between gap-2 px-5 pt-2 pb-4">
-                {/* Moving between existing results never triggers another search. */}
-                <Button size="sm" color="secondary" iconLeading={ArrowLeft} isDisabled={selectedIndex <= 0} onClick={() => onSelect(selectedIndex - 1)}>
-                    Previous
-                </Button>
-                <Button
-                    size="sm"
-                    color="secondary"
-                    iconTrailing={ArrowRight}
-                    isDisabled={selectedIndex >= results.length - 1}
-                    onClick={() => onSelect(Math.max(0, selectedIndex + 1))}
-                >
-                    Next
-                </Button>
-            </div>
         </div>
     );
 };

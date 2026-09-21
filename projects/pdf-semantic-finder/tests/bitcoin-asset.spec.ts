@@ -41,7 +41,7 @@ test.describe("assets/bitcoin.pdf", () => {
     };
 
     const exactSearch = async (page: Page, query: string) => {
-        await page.locator('label:has-text("Exact text")').click();
+        await page.getByRole("radio", { name: "Exact text" }).click();
         await page.getByLabel("Search query").fill(query);
         await page.getByLabel("Search query").press("Enter");
         await page.waitForFunction(
@@ -57,7 +57,7 @@ test.describe("assets/bitcoin.pdf", () => {
         await open(page);
 
         await expect(page.locator("footer p")).toContainText(`${SEGMENT_COUNT} searchable segments`);
-        await expect(page.locator("footer p")).toContainText("9 pages");
+        await expect(page.locator("header p")).toContainText("9 pages");
 
         await page.getByRole("button", { name: "View extracted text" }).click();
         const texts = await page.locator("article > p").evaluateAll((nodes) => nodes.map((node) => node.textContent ?? ""));
@@ -113,9 +113,9 @@ test.describe("assets/bitcoin.pdf", () => {
             });
         });
 
-        await page.locator('label:has-text("Meaning")').click();
+        await page.getByRole("radio", { name: "Meaning" }).click();
         await page.getByLabel("Search query").fill("what colour is the moon");
-        await page.getByRole("button", { name: "Search" }).click();
+        await page.getByRole("button", { name: "Search", exact: true }).click();
 
         // Meaning search evaluated everything and nothing cleared §7's threshold. That is a
         // judgement with a number behind it, and can be wrong in both directions.
@@ -161,7 +161,7 @@ test.describe("assets/bitcoin.pdf", () => {
             });
         });
 
-        await page.locator('label:has-text("Meaning")').click();
+        await page.getByRole("radio", { name: "Meaning" }).click();
 
         for (const id of ids) {
             await page.unroute("**/api/search");
@@ -181,7 +181,7 @@ test.describe("assets/bitcoin.pdf", () => {
             });
 
             await page.getByLabel("Search query").fill(`locate ${id}`);
-            await page.getByRole("button", { name: "Search" }).click();
+            await page.getByRole("button", { name: "Search", exact: true }).click();
 
             await expect(page.locator(".pdf-finder-highlight").first(), `segment ${id} produced no highlight`).toBeVisible({ timeout: 10_000 });
             // A mapping failure is reported rather than guessed at, so the message must stay away.
@@ -225,9 +225,9 @@ test.describe("assets/bitcoin.pdf", () => {
             });
         });
 
-        await page.locator('label:has-text("Meaning")').click();
+        await page.getByRole("radio", { name: "Meaning" }).click();
         await page.getByLabel("Search query").fill("how does the network agree on history");
-        await page.getByRole("button", { name: "Search" }).click();
+        await page.getByRole("button", { name: "Search", exact: true }).click();
         await expect(page.locator("ol li")).toHaveCount(1);
 
         await page.getByRole("button", { name: "View extracted text" }).click();
@@ -266,12 +266,12 @@ test.describe("assets/bitcoin.pdf", () => {
             });
         });
 
-        await page.locator('label:has-text("Meaning")').click();
+        await page.getByRole("radio", { name: "Meaning" }).click();
         await page.getByLabel("Search query").fill("what does this passage depend on");
-        await page.getByRole("button", { name: "Search" }).click();
+        await page.getByRole("button", { name: "Search", exact: true }).click();
         await expect(page.locator("ol li")).toHaveCount(1);
 
-        const disclosure = page.getByText("Context sent with this passage");
+        const disclosure = page.getByText("Show surrounding text");
         await expect(disclosure).toBeVisible();
         // Named for what it is. The provider never reports which context it used.
         await expect(page.getByText("what Jev used")).toHaveCount(0);
@@ -289,6 +289,57 @@ test.describe("assets/bitcoin.pdf", () => {
         // It becomes a result of its own, without a second search.
         await expect(page.locator("ol li")).toHaveCount(2);
         await expect(page.locator("ol li").nth(1)).toContainText(neighbourText);
+        await expect(page.locator(".pdf-finder-highlight").first()).toBeVisible();
+    });
+
+    test("takes its results from a streamed response", async ({ page }) => {
+        // The Worker answers with newline-delimited JSON — a progress line per batch and one final
+        // line — so the reader sees passages while the rest are still being judged. Playwright
+        // cannot fulfil a route with a stream, so this covers the protocol and the final state;
+        // the provisional rendering is covered by `tests/search-client.test.ts` and by a real
+        // measurement against the provider (docs/spec.md §14.21).
+        await open(page);
+
+        await page.route("**/api/search", async (route: Route) => {
+            const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string; segments: Array<{ id: string }> };
+            const { documentId, requestId, segments } = body;
+            const line = (message: unknown) => `${JSON.stringify(message)}\n`;
+
+            await route.fulfill({
+                status: 200,
+                headers: { "Content-Type": "application/x-ndjson" },
+                body:
+                    line({
+                        type: "progress",
+                        documentId,
+                        requestId,
+                        evaluated: 8,
+                        total: segments.length,
+                        results: [{ segmentId: segments[2].id, score: 1.4, relevantProbability: 0.44, confidence: 0.3 }],
+                    }) +
+                    line({
+                        type: "final",
+                        documentId,
+                        requestId,
+                        status: "matched",
+                        results: [{ segmentId: segments[9].id, score: 2, relevantProbability: 0.97, confidence: 0.9 }],
+                        evaluatedSegmentCount: segments.length,
+                        model: "jev-1.13.0",
+                        elapsedMs: 5_000,
+                    }),
+            });
+        });
+
+        await page.getByRole("radio", { name: "Meaning" }).click();
+        await page.getByLabel("Search query").fill("what does the network agree on");
+        await page.getByRole("button", { name: "Search", exact: true }).click();
+
+        // The final line wins: the provisional passage is replaced, not appended to.
+        await expect(page.locator("ol li")).toHaveCount(1);
+        await expect(page.locator("footer p")).toContainText("searched in");
+        // And the provisional wording is gone once the search has finished.
+        await expect(page.getByText("passages judged")).toHaveCount(0);
+        await expect(page.getByText("may still change")).toHaveCount(0);
         await expect(page.locator(".pdf-finder-highlight").first()).toBeVisible();
     });
 

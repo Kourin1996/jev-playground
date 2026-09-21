@@ -373,6 +373,10 @@ const segmentPage = (page: SegmentationPage): ExtractedLine[][] => {
         const previous = index > 0 ? lines[index - 1] : null;
         const gap = previous === null ? 0 : Math.max(0, previous.y - line.y);
 
+        // A change of column is a hard boundary, like a page break: the last line of one column and
+        // the first of the next are adjacent in reading order and belong to different passages.
+        const changedColumn = previous !== null && (previous.column ?? 0) !== (line.column ?? 0);
+
         const hasParagraphGap = typicalGap > 0 && gap > typicalGap * PARAGRAPH_GAP_RATIO;
         const isHeading =
             (bodyFontSize > 0 && line.fontSize > bodyFontSize * HEADING_FONT_RATIO) ||
@@ -399,14 +403,15 @@ const segmentPage = (page: SegmentationPage): ExtractedLine[][] => {
 
         const shouldBreak =
             currentGroup.length > 0 &&
-            (wouldExceedHardLimit ||
+            (changedColumn ||
+                wouldExceedHardLimit ||
                 (isBoundaryCandidate && !isContinuation) ||
                 (currentLength >= LIMITS.softMaxSegmentCharacters && previousLineEndsSentence));
 
         // The hard maximum is the only break that can land mid-sentence, so it is the only one
         // that cuts back; every other break is already at a boundary the text offered.
         if (shouldBreak) {
-            if (wouldExceedHardLimit) flushAtLastSentence();
+            if (wouldExceedHardLimit && !changedColumn) flushAtLastSentence();
             else flush();
         }
 

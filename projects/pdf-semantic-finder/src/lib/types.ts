@@ -14,24 +14,28 @@ export const LIMITS = {
      */
     maxPageCount: 50,
     /**
-     * Derived from the page limit, not chosen independently: `maxPageCount × 2,000`.
+     * Derived from the page limit, not chosen independently: `maxPageCount × 4,000`.
      *
-     * 2,000 characters a page is the density of an ordinary Japanese document — measured against
-     * 3,853 on the deliberately dense fixture and 2,351 on the Bitcoin whitepaper. A page limit
-     * without a matching character limit is not a page limit at all: at the previous 50,000 a
-     * 50-page document had to average 1,000 characters a page to be accepted, so the ordinary case
-     * was rejected on characters and the page number meant nothing.
+     * 4,000 characters a page is what real documents turned out to hold. This was 2,000, chosen
+     * from the fixtures in this repository — the Bitcoin whitepaper at 2,351 and a deliberately
+     * dense generated contract at 3,853 — and a reader's own 42-page PDF came in at **3,613
+     * characters a page**, 151,728 in total, and was refused. Fixtures built to exercise a limit
+     * are not a sample of what people open.
+     *
+     * A page limit without a matching character limit is not a page limit at all: at 50 pages and
+     * 100,000 characters a document had to average 2,000 characters a page to be accepted, so the
+     * ordinary case was rejected on characters and the page number meant nothing.
      */
-    maxExtractedCharacters: 100_000,
+    maxExtractedCharacters: 200_000,
     /**
      * Derived from the measured median unit size, not from an assumed one.
      *
-     * `maxExtractedCharacters / typicalSegmentCharacters` is `100,000 / 100 = 1,000`. See
+     * `maxExtractedCharacters / typicalSegmentCharacters` is `200,000 / 100 = 2,000`. See
      * `typicalSegmentCharacters` for where 125 comes from. A document that stays inside the
      * character cap but divides far more finely than that is rejected with its segment count
      * named, the way every other declared limit behaves — it is never re-merged to fit.
      */
-    maxSegmentCount: 1_000,
+    maxSegmentCount: 2_000,
     maxSegmentCharacters: 800,
     maxQueryCharacters: 200,
     /**
@@ -40,14 +44,14 @@ export const LIMITS = {
      *
      * Each segment's text travels three times — as itself, and as each neighbour's context — so
      * the worst case is `3 × maxExtractedCharacters` characters. At 4 UTF-8 bytes each (a
-     * surrogate pair such as 𠮟 counts as one character and four bytes) that is 1,200,000, plus
-     * about 80 bytes of JSON per segment at `maxSegmentCount`, which is 1,280,000.
+     * surrogate pair such as 𠮟 counts as one character and four bytes) that is 2,400,000, plus
+     * about 80 bytes of JSON per segment at `maxSegmentCount`, which is 2,560,000.
      *
      * This was 256 KiB, which a full-size Japanese document exceeded on context duplication
      * alone: the Worker answered `request_body_too_large` for a document the client had already
      * accepted. No test caught it because no fixture is anywhere near the character cap.
      */
-    maxRequestBodyBytes: 2 * 1024 * 1024,
+    maxRequestBodyBytes: 4 * 1024 * 1024,
     /**
      * Length below which a group is *considered* for merging into a neighbour.
      *
@@ -94,16 +98,19 @@ export const LIMITS = {
     /**
      * In-flight requests.
      *
-     * At the segment cap this is `ceil(1,000 / 4) = 250` requests, so 16 rounds, leaving about
-     * 940 ms per round-trip inside `searchDeadlineMs`. Measured round-trips are 450 ms on the
-     * English whitepaper and 270 ms on a dense Japanese document, so that is roughly twofold
-     * headroom. Raised from 8 when the page limit went to 50: at 8 the same cap would need 32
-     * rounds and 470 ms each, which the measurements do not support.
+     * Set from a measured sweep rather than from arithmetic. On a 468-request search the same
+     * batches completed in 7,167 ms at 16, **5,083 ms at 24** and 3,655 ms at 32, with no
+     * throttled response at any of them.
      *
-     * The provider allows 1,200 requests a minute, and a search at the cap issues 250 over about
-     * seven seconds — within the limit alone, but two such searches at once approach it.
+     * 24 is the last step inside the provider's published 250,000 tokens a second: it ran at
+     * 222k, while 32 ran at 308k. Nothing refused that, but the documentation says the limits
+     * adjust without notice, so relying on exceeding a published number is not something to build
+     * into a declared capacity.
+     *
+     * The other published limit, 1,200 requests a minute, is not near: a search at the segment cap
+     * issues 500 over about five seconds.
      */
-    maxConcurrentRequests: 16,
+    maxConcurrentRequests: 24,
     searchDeadlineMs: 15_000,
     maxResults: 3,
 } as const;
@@ -183,6 +190,14 @@ export type LinePiece = {
 /** One reconstructed line of text, with the original item indexes it was built from. */
 export type ExtractedLine = {
     text: string;
+    /**
+     * Which column of a multi-column page this line belongs to, counting from the left.
+     *
+     * Absent, and therefore 0, on an ordinary page. A change of column is a hard segment boundary
+     * for the same reason a page break is: the last line of the left column and the first of the
+     * right are adjacent in reading order and belong to different passages entirely.
+     */
+    column?: number;
     /** Where each original item landed in `text`, in reading order. */
     pieces: LinePiece[];
     /**
@@ -273,6 +288,19 @@ export type SearchHit = {
     /** Present only for meaning results, which are whole segments. */
     segmentId?: string;
     /**
+     * What the model made of this passage, for meaning results only.
+     *
+     * §3 used to forbid showing this, on the grounds that a percentage reads as precision the
+     * product has not earned. It is shown now because hiding it did not make the number go away —
+     * it only left the reader unable to tell a passage the model was certain about from one it was
+     * guessing at, which is the difference that decides whether to trust a result.
+     *
+     * It is presented as the model's own confidence and never as a match percentage, and §14.19 is
+     * why: the same passage moved across all three §7 bands depending on which other passages
+     * shared its request. Treat it as a reading, not a measurement.
+     */
+    judgement?: SearchResultRecord;
+    /**
      * The neighbouring passages that travelled with this one, and which segment each of them is.
      *
      * Only for meaning results. A clause whose limit lives next door — `前項の期限を守った場合に限り`
@@ -308,6 +336,30 @@ export type SearchRequest = {
     }>;
 };
 
+/**
+ * One line of the streamed `/api/search` body, newline-delimited JSON.
+ *
+ * A search at the segment cap is 500 round-trips deep and takes about five seconds, while the
+ * first answers come back in under half a second. Progress lines carry what is known so far;
+ * exactly one `final` line ends the stream and is the authoritative result.
+ *
+ * A progress line deliberately carries **no status**. §7 classifies over every segment, so
+ * `no_match` halfway through would be a claim the search has not earned — the provisional list is
+ * whatever currently scores highest, nothing more.
+ */
+export type SearchStreamMessage =
+    | {
+          type: "progress";
+          documentId: string;
+          requestId: string;
+          evaluated: number;
+          total: number;
+          /** The highest scoring passages among those evaluated so far. Order may still change. */
+          results: SearchResultRecord[];
+      }
+    | ({ type: "final" } & SearchResponse)
+    | { type: "error"; error: SearchErrorResponse["error"] };
+
 export type SearchResultRecord = {
     segmentId: string;
     score: number;
@@ -332,6 +384,14 @@ export type SearchResponse = {
      */
     evaluations?: SearchResultRecord[];
     evaluatedSegmentCount: number;
+    /**
+     * How many requests the Worker made to the provider for this search.
+     *
+     * Operational, not a result: it belongs in the status bar beside the durations so the cost of
+     * a search is visible while the batching is still being tuned. One question is asked per
+     * evaluated segment, so `evaluatedSegmentCount` is the question count.
+     */
+    requestCount: number;
     model: string;
     elapsedMs: number;
 };

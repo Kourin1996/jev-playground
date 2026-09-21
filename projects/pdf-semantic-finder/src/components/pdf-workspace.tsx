@@ -6,7 +6,8 @@
  * captured identifier would always agree with itself, so results from a discarded PDF would render
  * against the new one — a silent wrong-passage failure rather than an error.
  */
-import { useCallback, useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileUploadDropZone } from "@/components/application/file-upload/file-upload-base";
 import { Button } from "@/components/base/buttons/button";
 import { ExtractedTextView } from "@/components/extracted-text-view";
@@ -29,6 +30,26 @@ import { LIMITS } from "@/lib/types";
 
 /** No result is being shown in the viewer. */
 const NO_SELECTION = -1;
+
+/** Zoom is stored to two decimals so the label and the rendered scale cannot disagree. */
+const round = (value: number) => Number(value.toFixed(2));
+
+/**
+ * The zoom levels the buttons step through.
+ *
+ * A ladder rather than ±0.25 from wherever fit-to-width landed: fitting a page gives an arbitrary
+ * scale such as 1.38, and stepping from it would never reach 100% again. §11.2 asks for the
+ * highlight to be checked at 100%, 125% and 150%, which has to be something a reader can actually
+ * select.
+ */
+const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3] as const;
+const zoomOut = (scale: number) => [...ZOOM_STEPS].reverse().find((step) => step < scale - 0.001) ?? ZOOM_STEPS[0];
+const zoomIn = (scale: number) => ZOOM_STEPS.find((step) => step > scale + 0.001) ?? ZOOM_STEPS[ZOOM_STEPS.length - 1];
+
+/** Bounds for the results panel: narrow enough to read a passage, wide enough to leave the page usable. */
+const MIN_PANEL_WIDTH = 280;
+const MAX_PANEL_WIDTH = 560;
+const clampPanelWidth = (width: number) => Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, Math.round(width)));
 
 type LoadedDocument = {
     documentId: string;
@@ -98,6 +119,21 @@ export const PdfWorkspace = () => {
     const [searchError, setSearchError] = useState<string | null>(null);
     const [searchMs, setSearchMs] = useState<number | null>(null);
     /**
+     * How far a meaning search has got, or null when none is running.
+     *
+     * The results shown while this is set are whatever currently scores highest, and they change
+     * as more passages are judged. The panel says so: §7 classifies over every segment, so no
+     * status is claimed until the search finishes.
+     */
+    const [progress, setProgress] = useState<{ evaluated: number; total: number } | null>(null);
+    /**
+     * What the last meaning search cost, in the two units that actually bill.
+     *
+     * Spec §14.20 measures per request, not per question, so both numbers have to be visible: a
+     * document twice the size is twice the questions but not necessarily twice the requests.
+     */
+    const [lastSearchCost, setLastSearchCost] = useState<{ questions: number; requests: number } | null>(null);
+    /**
      * Every segment's judgement from the last meaning search, for the extracted-text view.
      *
      * Cleared with the rest of the search state, so it can never describe a document or a query
@@ -106,8 +142,13 @@ export const PdfWorkspace = () => {
     const [evaluations, setEvaluations] = useState<Map<string, SearchResultRecord> | null>(null);
     const [highlightFailure, setHighlightFailure] = useState<HighlightTargetFailure | null>(null);
 
-    const [scale, setScale] = useState(1);
+    const [scale, setScale] = useState<number | null>(null);
     const [showExtractedText, setShowExtractedText] = useState(false);
+    const [visiblePage, setVisiblePage] = useState(1);
+    /** Width of the results panel, dragged by the divider between the two. */
+    const [panelWidth, setPanelWidth] = useState(336);
+    const viewerRef = useRef<HTMLDivElement>(null);
+    const [fitScale, setFitScale] = useState(1);
 
     // Refs hold the authoritative current identifiers. They are updated synchronously, so a guard
     // reads the newest value even before React commits.
@@ -124,6 +165,8 @@ export const PdfWorkspace = () => {
         setSearchError(null);
         setHighlightFailure(null);
         setEvaluations(null);
+        setProgress(null);
+        setLastSearchCost(null);
     }, []);
 
     const openDocument = useCallback(
@@ -234,8 +277,36 @@ export const PdfWorkspace = () => {
             abortRef.current = controller;
             setIsSearching(true);
 
+            const byId = new Map(loaded.segments.map((segment) => [segment.id, segment]));
+            const toHits = (records: readonly SearchResultRecord[]): SearchHit[] =>
+                records
+                    .map((record) => ({ record, segment: byId.get(record.segmentId) }))
+                    .filter((entry): entry is { record: SearchResultRecord; segment: PdfSegment } => entry.segment !== undefined)
+                    .map(({ record, segment }): SearchHit => ({
+                        key: segment.id,
+                        pageNumber: segment.pageNumber,
+                        // Meaning results address whole items: the evidence is the segment.
+                        ranges: segment.ranges,
+                        previewText: segment.originalText,
+                        segmentId: segment.id,
+                        judgement: record,
+                        ...neighbourContext(loaded.segments, segment),
+                    }));
+
             try {
-                const outcome = await requestSemanticSearch(buildSearchRequest(documentId, requestId, query, loaded.segments), controller.signal);
+                const outcome = await requestSemanticSearch(buildSearchRequest(documentId, requestId, query, loaded.segments), controller.signal, (update) => {
+                    // Guarded like the final response: a partial result from a superseded
+                    // search must not reach the screen either.
+                    if (currentDocumentIdRef.current !== documentId || currentRequestIdRef.current !== requestId) return;
+
+                    setProgress({ evaluated: update.evaluated, total: update.total });
+                    setResults((current) => {
+                        const next = toHits(update.results);
+                        // Leave the selection alone once the reader has moved it.
+                        if (current.length === 0 && next.length > 0) setSelectedIndex(0);
+                        return next;
+                    });
+                });
 
                 if (controller.signal.aborted) return;
                 if (currentDocumentIdRef.current !== documentId) return;
@@ -251,26 +322,13 @@ export const PdfWorkspace = () => {
                     return;
                 }
 
-                const byId = new Map(loaded.segments.map((segment) => [segment.id, segment]));
-                const views = outcome.response.results
-                    .map((record) => byId.get(record.segmentId))
-                    .filter((segment): segment is PdfSegment => segment !== undefined)
-                    .map((segment): SearchHit => ({
-                        key: segment.id,
-                        pageNumber: segment.pageNumber,
-                        // Meaning results address whole items: the evidence is the segment.
-                        ranges: segment.ranges,
-                        previewText: segment.originalText,
-                        segmentId: segment.id,
-                        // Which segments the context strings came from, so the reader can be taken
-                        // to them. Recovered from position rather than carried in the response:
-                        // `buildSegments` takes context from the neighbours on the same page.
-                        ...neighbourContext(loaded.segments, segment),
-                    }));
+                const views = toHits(outcome.response.results);
 
+                setProgress(null);
                 setStatus(outcome.response.status);
                 setResults(views);
                 setEvaluations(new Map((outcome.response.evaluations ?? []).map((record) => [record.segmentId, record])));
+                setLastSearchCost({ questions: loaded.segments.length, requests: outcome.response.requestCount });
                 setSelectedIndex(views.length > 0 ? 0 : NO_SELECTION);
                 setSearchMs(Math.round(performance.now() - searchStartedAt));
             } catch (error) {
@@ -284,7 +342,10 @@ export const PdfWorkspace = () => {
             } finally {
                 // Keyed on the request rather than on the abort flag: an aborted search whose
                 // controller never resolves would otherwise leave the button spinning forever.
-                if (currentRequestIdRef.current === requestId) setIsSearching(false);
+                if (currentRequestIdRef.current === requestId) {
+                    setIsSearching(false);
+                    setProgress(null);
+                }
             }
         },
         [loaded, query, resetSearchState],
@@ -325,6 +386,71 @@ export const PdfWorkspace = () => {
         [loaded],
     );
 
+    /**
+     * The scale actually rendered: the reader's choice, or the width of the viewport when they
+     * have not made one.
+     *
+     * 100% left a page sitting in a field of grey on a wide screen. Fitting the width by default
+     * makes the document the thing on screen and demotes zoom to an adjustment; pressing the
+     * percentage goes back to fitting.
+     */
+    const effectiveScale = scale ?? fitScale;
+
+    useEffect(() => {
+        const element = viewerRef.current;
+        if (element === null || loaded === null) return;
+
+        let cancelled = false;
+        let unscaledWidth = 0;
+
+        const apply = () => {
+            const available = element.clientWidth;
+            if (cancelled || unscaledWidth <= 0 || available <= 0) return;
+            // 48px of gutter, matching the padding the viewer puts around a page.
+            setFitScale(Math.min(3, Math.max(0.5, round((available - 48) / unscaledWidth))));
+        };
+
+        void loaded.extraction.document
+            .getPage(1)
+            .then((page) => {
+                if (cancelled) return;
+                unscaledWidth = page.getViewport({ scale: 1 }).width;
+                apply();
+            })
+            .catch(() => undefined);
+
+        const observer = new ResizeObserver(apply);
+        observer.observe(element);
+        return () => {
+            cancelled = true;
+            observer.disconnect();
+        };
+    }, [loaded]);
+
+    /**
+     * Drag handling stays on the pointer that started it: capturing the pointer keeps the drag
+     * alive over the PDF canvas, which would otherwise swallow the move events.
+     */
+    const startPanelDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        const handle = event.currentTarget;
+        const offset = event.clientX - handle.getBoundingClientRect().left;
+        const origin = handle.parentElement?.getBoundingClientRect().left ?? 0;
+
+        handle.setPointerCapture(event.pointerId);
+
+        const move = (moveEvent: PointerEvent) => setPanelWidth(clampPanelWidth(moveEvent.clientX - offset - origin));
+        const stop = () => {
+            handle.removeEventListener("pointermove", move);
+            handle.removeEventListener("pointerup", stop);
+            handle.removeEventListener("pointercancel", stop);
+        };
+
+        handle.addEventListener("pointermove", move);
+        handle.addEventListener("pointerup", stop);
+        handle.addEventListener("pointercancel", stop);
+    }, []);
+
     const limitMessage = useMemo(() => {
         if (loaded === null || loaded.limitViolations.length === 0) return undefined;
         return `${describeLimitViolation(loaded.limitViolations[0])} Search is unavailable for this document.`;
@@ -356,31 +482,41 @@ export const PdfWorkspace = () => {
         loaded === null
             ? null
             : [
-                  loaded.fileName,
-                  `${loaded.extraction.pageCount} pages`,
                   `${loaded.segments.length} searchable segments`,
                   ...(loaded.extraction.pagesWithoutText.length > 0 ? [`no text on page ${loaded.extraction.pagesWithoutText.join(", ")}`] : []),
                   ...(loaded.extraction.rotatedPages.length > 0 ? [`unsupported rotation on page ${loaded.extraction.rotatedPages.join(", ")}`] : []),
                   ...(loaded.extraction.multiColumnPages.length > 0 ? [`side-by-side text on page ${loaded.extraction.multiColumnPages.join(", ")}`] : []),
                   `extracted in ${loaded.extractionMs} ms`,
                   ...(searchMs === null ? [] : [`searched in ${searchMs} ms`]),
+                  // What the last meaning search cost, so the batching can be judged while it is
+                  // still being tuned. One question is asked per evaluated segment.
+                  ...(lastSearchCost === null ? [] : [`${lastSearchCost.questions} Jev questions in ${lastSearchCost.requests} API calls`]),
               ].join(" · ");
 
     return (
         <div className="flex h-dvh justify-center bg-primary">
             <div className="flex w-full max-w-300 flex-col">
-                <header className="flex items-center justify-between px-6 pt-5 pb-3">
-                    <h1 className="text-lg font-semibold tracking-tight text-primary">PDF Semantic Finder</h1>
+                <header className="flex items-center justify-between gap-4 px-6 pt-5 pb-3">
+                    <div className="flex min-w-0 items-baseline gap-3">
+                        <h1 className="shrink-0 text-lg font-semibold tracking-tight text-primary">PDF Semantic Finder</h1>
+                        {/*
+                         * Which document is open belongs beside the title, not in the status bar
+                         * at the foot of the screen with the timings — one is what the reader is
+                         * working on, the others are how the machine got on.
+                         */}
+                        {loaded !== null && (
+                            <p className="truncate text-sm text-tertiary">
+                                {loaded.fileName} · {loaded.extraction.pageCount} pages
+                            </p>
+                        )}
+                    </div>
                     {/*
-                     * Both controls appear only once a document is open. Before that the drop zone
-                     * is the single affordance on the screen, and a second way to do the same thing
+                     * Open PDF appears only once a document is open. Before that the drop zone is
+                     * the single affordance on the screen, and a second way to do the same thing
                      * beside an empty page is noise.
                      */}
                     {loaded !== null && (
-                        <div className="flex items-center gap-2">
-                            <Button size="sm" color="tertiary" onClick={() => setShowExtractedText((value) => !value)}>
-                                {showExtractedText ? "Hide extracted text" : "View extracted text"}
-                            </Button>
+                        <div className="flex shrink-0 items-center gap-2">
                             {/* The input is visually hidden but still focusable, so the ring is drawn on the label. */}
                             <label className="inline-flex rounded-lg outline-brand focus-within:outline-2 focus-within:outline-offset-2">
                                 <input
@@ -416,21 +552,51 @@ export const PdfWorkspace = () => {
 
                 <main className="flex min-h-0 flex-1">
                     {loaded !== null && (
-                        <aside className="flex w-84 shrink-0 flex-col">
-                            <SearchResults
-                                hasDocument={loaded !== null}
-                                status={status}
-                                results={results}
-                                selectedIndex={selectedIndex}
-                                onSelect={setSelectedIndex}
-                                errorMessage={searchError}
-                                locationErrorMessage={highlightMessage}
-                                unsearchedPages={unsearchedPages}
-                                unsupportedLayoutPages={unsupportedLayoutPages}
-                                onOpenSegment={openSegment}
-                                mode={mode}
-                            />
-                        </aside>
+                        <>
+                            <aside className="flex shrink-0 flex-col" style={{ width: panelWidth }}>
+                                <SearchResults
+                                    hasDocument={loaded !== null}
+                                    status={status}
+                                    results={results}
+                                    selectedIndex={selectedIndex}
+                                    onSelect={setSelectedIndex}
+                                    errorMessage={searchError}
+                                    locationErrorMessage={highlightMessage}
+                                    unsearchedPages={unsearchedPages}
+                                    unsupportedLayoutPages={unsupportedLayoutPages}
+                                    onOpenSegment={openSegment}
+                                    mode={mode}
+                                    query={query}
+                                    progress={progress}
+                                />
+                            </aside>
+
+                            {/*
+                             * A separator, not a scrollbar: a long passage and a wide page want
+                             * different splits, and the reader is the one who knows which.
+                             * Keyboard-operable because a pointer drag is not an accessible
+                             * control on its own.
+                             */}
+                            <div
+                                role="separator"
+                                aria-label="Resize results panel"
+                                aria-orientation="vertical"
+                                aria-valuenow={panelWidth}
+                                aria-valuemin={MIN_PANEL_WIDTH}
+                                aria-valuemax={MAX_PANEL_WIDTH}
+                                tabIndex={0}
+                                onPointerDown={startPanelDrag}
+                                onKeyDown={(event) => {
+                                    const step = event.key === "ArrowLeft" ? -16 : event.key === "ArrowRight" ? 16 : 0;
+                                    if (step === 0) return;
+                                    event.preventDefault();
+                                    setPanelWidth((width) => clampPanelWidth(width + step));
+                                }}
+                                className="group relative w-1.5 shrink-0 cursor-col-resize outline-brand focus-visible:outline-2 focus-visible:-outline-offset-2"
+                            >
+                                <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border-secondary transition-colors duration-100 group-hover:bg-border-brand" />
+                            </div>
+                        </>
                     )}
 
                     <section className="relative flex min-w-0 flex-1 flex-col">
@@ -475,47 +641,75 @@ export const PdfWorkspace = () => {
                             </div>
                         ) : (
                             <div className="flex min-h-0 flex-1 flex-col">
-                                <div className="flex-1 overflow-y-auto rounded-tl-2xl bg-secondary">
-                                    <PdfViewer
-                                        document={loaded.extraction.document}
-                                        pages={loaded.extraction.pages}
-                                        scale={scale}
-                                        highlightedHit={highlightedHit}
-                                        onHighlightFailure={setHighlightFailure}
-                                    />
-                                </div>
-                                <div className="flex items-center justify-end gap-2 bg-secondary px-5 py-2.5">
-                                    <Button
-                                        size="sm"
-                                        color="secondary"
-                                        onClick={() => setScale((value) => Math.max(0.5, Number((value - 0.25).toFixed(2))))}
-                                        aria-label="Zoom out"
-                                    >
-                                        −
-                                    </Button>
-                                    <span className="w-14 text-center text-sm text-secondary">{Math.round(scale * 100)}%</span>
-                                    <Button
-                                        size="sm"
-                                        color="secondary"
-                                        onClick={() => setScale((value) => Math.min(3, Number((value + 0.25).toFixed(2))))}
-                                        aria-label="Zoom in"
-                                    >
-                                        +
-                                    </Button>
-                                </div>
-                            </div>
-                        )}
+                                <div className="relative min-h-0 flex-1">
+                                    <div ref={viewerRef} className="absolute inset-0 overflow-y-auto rounded-tl-2xl bg-secondary">
+                                        <PdfViewer
+                                            document={loaded.extraction.document}
+                                            pages={loaded.extraction.pages}
+                                            scale={effectiveScale}
+                                            highlightedHit={highlightedHit}
+                                            onHighlightFailure={setHighlightFailure}
+                                            onVisiblePageChange={setVisiblePage}
+                                        />
+                                    </div>
 
-                        {/*
-                         * Layered over the viewer rather than replacing it. Unmounting the viewer
-                         * tears down every canvas and text layer, so looking at the extraction
-                         * would re-render the whole document and drop the reader back at page 1 —
-                         * losing the position a result had just navigated to. The highlight
-                         * itself is re-applied either way; the place in the document is not.
-                         */}
-                        {loaded !== null && showExtractedText && (
-                            <div className="absolute inset-0 overflow-y-auto rounded-tl-2xl bg-primary">
-                                <ExtractedTextView segments={loaded.segments} evaluations={evaluations} />
+                                    {/*
+                                     * Layered over the viewer rather than replacing it. Unmounting the
+                                     * viewer tears down every canvas and text layer, so looking at the
+                                     * extraction would re-render the whole document and drop the reader
+                                     * back at page 1 — losing the position a result had just navigated
+                                     * to. The highlight itself is re-applied either way; the place in
+                                     * the document is not.
+                                     *
+                                     * It covers the viewer only. Covering the control row underneath
+                                     * would bury the button that dismisses it.
+                                     */}
+                                    {showExtractedText && (
+                                        <div className="absolute inset-0 overflow-y-auto rounded-tl-2xl bg-primary">
+                                            <ExtractedTextView segments={loaded.segments} evaluations={evaluations} />
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="flex items-center justify-between gap-2 bg-secondary px-5 py-2.5">
+                                    {/*
+                                     * The debug view sits with the viewer it replaces rather than
+                                     * beside Open PDF, which separates what a reader does from
+                                     * what someone working on the extraction does.
+                                     */}
+                                    <Button size="sm" color="tertiary" onClick={() => setShowExtractedText((value) => !value)}>
+                                        {showExtractedText ? "Hide extracted text" : "View extracted text"}
+                                    </Button>
+
+                                    <div className="flex items-center gap-2">
+                                        {/* Which page the reader is on, which the scroll position alone does not say. */}
+                                        <span className="text-sm text-tertiary tabular-nums">
+                                            {visiblePage} / {loaded.extraction.pageCount}
+                                        </span>
+                                        <span className="mx-1 h-4 w-px bg-border-secondary" aria-hidden="true" />
+                                        {/*
+                                         * Secondary even when active: zoom is an adjustment to a
+                                         * viewer that already fits, not something to draw the eye
+                                         * away from the document.
+                                         */}
+                                        <Button
+                                            size="sm"
+                                            color={scale === null ? "secondary" : "tertiary"}
+                                            aria-pressed={scale === null}
+                                            onClick={() => setScale(null)}
+                                        >
+                                            Fit
+                                        </Button>
+                                        <Button size="sm" color="secondary" onClick={() => setScale(zoomOut(effectiveScale))} aria-label="Zoom out">
+                                            −
+                                        </Button>
+                                        <span aria-label="Zoom level" className="w-12 text-center text-sm text-secondary tabular-nums">
+                                            {Math.round(effectiveScale * 100)}%
+                                        </span>
+                                        <Button size="sm" color="secondary" onClick={() => setScale(zoomIn(effectiveScale))} aria-label="Zoom in">
+                                            +
+                                        </Button>
+                                    </div>
+                                </div>
                             </div>
                         )}
                     </section>

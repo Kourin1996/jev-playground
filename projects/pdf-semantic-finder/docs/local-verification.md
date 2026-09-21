@@ -44,7 +44,7 @@ Copied pdfjs-dist 6.3.289 runtime assets into public/pdfjs/
 npm run fixtures:sample
 ```
 
-This writes eight PDFs into `tests/fixtures/`. `sample-contract-ja.pdf` is the one most tests use. Five cover the limit and layout behaviour of spec §10 and §2: `sample-blank-page-ja.pdf` (page 2 carries no text), `sample-over-limit-ja.pdf` (nine pages, past the character cap), `sample-encrypted.pdf` (password protected), `sample-no-text.pdf` (nothing extractable) and `sample-two-column-ja.pdf` (side-by-side columns). Two are for measurement rather than behaviour: `eval-terms-ja.pdf` is the §11.1 evaluation subject, written so that nothing in this implementation was tuned against it, and `sample-near-limit-ja.pdf` is 48 pages and 672 segments — inside every declared limit and close to both, so it times a near-capacity search.
+This writes eight PDFs into `tests/fixtures/`. `sample-contract-ja.pdf` is the one most tests use. Five cover the limit and layout behaviour of spec §10 and §2: `sample-blank-page-ja.pdf` (page 2 carries no text), `sample-over-limit-ja.pdf` (nine pages, past the character cap), `sample-encrypted.pdf` (password protected), `sample-no-text.pdf` (nothing extractable) and `sample-two-column-ja.pdf` (side-by-side columns). Two are for measurement rather than behaviour: `eval-terms-ja.pdf` is the §11.1 evaluation subject, written so that nothing in this implementation was tuned against it, and `sample-near-limit-ja.pdf` is 48 pages and 1,872 segments — 94% of the segment cap and inside every other limit, so it times a near-capacity search.
 
 It is **a development aid, not an acceptance fixture.** The three fictional PDFs that spec §11.1
 requires, and the 20-query evaluation set that goes with them, are still outstanding — see
@@ -109,11 +109,21 @@ PDF** button and no **View extracted text** button yet. Check the drop zone itse
 
 Then open `tests/fixtures/sample-contract-ja.pdf`.
 
-The status bar should read roughly:
+The header should name the document, and the status bar what was made of it:
 
 ```
-sample-contract-ja.pdf · 3 pages · 13 searchable segments · extracted in 230 ms
+header:  PDF Semantic Finder   sample-contract-ja.pdf · 3 pages
+footer:  13 searchable segments · extracted in 230 ms
 ```
+
+The viewer opens **fitted to the width** of its pane, so the percentage beside the zoom buttons is
+whatever fitting produced rather than 100%. **Fit** is pressed; pressing a zoom button releases it
+and steps a fixed ladder (50, 75, 100, 125, 150, 200, 300), and **Fit** returns. Beside them, the
+page indicator should follow the page you scroll to.
+
+Drag the divider between the results panel and the viewer. The panel should resize between about
+280 and 560 pixels and stay where it was put. Tab to it and press Left and Right — it must move
+from the keyboard too, since a pointer drag is not an accessible control on its own.
 
 ### 4.1 Extraction (spec §5, and the check AGENTS.md requires for extraction changes)
 
@@ -205,9 +215,20 @@ even though the query and the document share no keywords, and the viewer should 
 automatically. The result must be **第4条 alone**: if it arrives bundled with 第3条 and 第5条, the
 250-character floor has come back (spec §14.1).
 
-The status bar should show a search in the low hundreds of milliseconds. This document produces 4
-requests of 4 passages each — every request in a search carries the same number, because the size
-of the state moves the score (spec §14.19).
+The status bar should show a search in the low hundreds of milliseconds, and what it cost:
+`13 Jev questions in 4 API calls`. This document produces 4 requests of 4 passages each — every
+request in a search carries the same number, because the size of the state moves the score (spec
+§14.19).
+
+Each result should now carry the model's own judgement — `72% confident · certainty 0.80` or
+similar — under a **Model judgment** line explaining what those numbers are. Check that line is
+**on screen as text**, not only in a hover tooltip: a reader on a touch screen or a keyboard never
+sees a tooltip, and a bare percentage reads as a measured match. Nothing anywhere should say
+"N% match".
+
+Terms of the query that appear literally in a passage should be bold in the preview. A paraphrase
+match shows no emphasis at all — that is correct, not a bug: the response never says which words it
+read.
 
 Then select **View extracted text** again. Every segment now carries what Jev judged it to be — a
 percentage, a bar with both thresholds marked on it, the score and the confidence — including the
@@ -246,16 +267,18 @@ outside the project, and those found a defect four rounds of in-house tests had 
 whose figures outnumber their prose were being split line by line, so every answer arrived cut
 mid-sentence.
 
-Timing near the limits is covered by `sample-near-limit-ja.pdf`: 48 pages, 672 segments, 168
-requests, and about 2.8–3.1 s against a 15-second deadline over three runs. Zoom it to 300% and
-check it stays usable — 48 pages hold 827 MB of canvas there, which is what bounds the page limit.
+Timing near the limits is covered by `sample-near-limit-ja.pdf`: 48 pages, 1,872 segments, 468
+requests, about 5.2–5.5 s against a 15-second deadline, and the first passages on screen in well
+under a second because the response is streamed. Watch for the "N of M passages judged" line while
+it runs. Zoom it to 300% and check it stays usable — 48 pages hold 827 MB of canvas there, which is
+what bounds the page limit.
 
 These remain outstanding, and none has a local substitute.
 
 | Not verifiable                                      | Blocked on                                                                                                                |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Whether §7's thresholds are in the right place      | A set with enough queries whose answers sit near 0.35 and 0.65, and a document written by someone other than this project |
-| Behaviour at the 1,000-segment cap itself           | No fixture reaches it; `sample-near-limit-ja.pdf` stops at 672                                                            |
+| Behaviour at the 2,000-segment cap itself           | No fixture reaches it; `sample-near-limit-ja.pdf` stops at 1,872, which is 94% of it                                      |
 | What a rate-limited retry costs inside the deadline | It has never been observed; the retry path is covered only by unit tests with an injected clock                           |
 | Whether a PDF's own text can steer a judgement      | Not attempted. `docs/spec.md` §14.19 measures ordinary passages sharing a state, which is a different problem             |
 

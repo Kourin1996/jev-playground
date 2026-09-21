@@ -38,10 +38,11 @@ test.describe("declared limits", () => {
         await page.waitForFunction(() => document.querySelectorAll(".textLayer span").length > 5);
 
         await expect(page.locator("footer p")).toContainText("no text on page 2");
-        await expect(page.locator("footer p")).toContainText("3 pages");
+        // The document's identity lives in the header now; the footer carries only the timings.
+        await expect(page.locator("header p")).toContainText("3 pages");
 
         // The pages that do have text remain searchable.
-        await page.locator('label:has-text("Exact text")').click();
+        await page.getByRole("radio", { name: "Exact text" }).click();
         await page.getByLabel("Search query").fill("返還は行わない");
         await page.getByLabel("Search query").press("Enter");
         await expect(page.locator("ol li")).toHaveCount(1);
@@ -66,9 +67,9 @@ test.describe("declared limits", () => {
         await open(page, BLANK_PAGE);
         await page.waitForFunction(() => document.querySelectorAll(".textLayer span").length > 5);
 
-        await page.locator('label:has-text("Meaning")').click();
+        await page.getByRole("radio", { name: "Meaning" }).click();
         await page.getByLabel("Search query").fill("ログインの方法は");
-        await page.getByRole("button", { name: "Search" }).click();
+        await page.getByRole("button", { name: "Search", exact: true }).click();
 
         // The scope of the search and its result are two separate statements: an empty result over
         // part of a document must not read as "the document does not say".
@@ -92,7 +93,7 @@ test.describe("declared limits", () => {
         await page.waitForFunction(() => document.querySelectorAll(".textLayer span").length > 50);
 
         // The document is still rendered and readable; only search is withheld.
-        await expect(page.locator(".pdf-finder-page")).toHaveCount(20);
+        await expect(page.locator(".pdf-finder-page")).toHaveCount(41);
         await expect(page.getByRole("button", { name: "View extracted text" })).toBeVisible();
 
         // The limit is named with real numbers rather than a generic refusal, and the number comes
@@ -103,10 +104,10 @@ test.describe("declared limits", () => {
         await expect(message).toContainText("Search is unavailable for this document");
 
         await expect(page.getByLabel("Search query")).toBeDisabled();
-        await expect(page.getByRole("button", { name: "Search" })).toBeDisabled();
+        await expect(page.getByRole("button", { name: "Search", exact: true })).toBeDisabled();
 
         await page
-            .getByRole("button", { name: "Search" })
+            .getByRole("button", { name: "Search", exact: true })
             .click({ force: true })
             .catch(() => undefined);
         await page.waitForTimeout(800);
@@ -119,7 +120,7 @@ test.describe("declared limits", () => {
 
         await expect(page.getByText("password protected")).toBeVisible();
         await expect(page.locator(".pdf-finder-page")).toHaveCount(0);
-        await expect(page.getByRole("button", { name: "Search" })).toBeDisabled();
+        await expect(page.getByRole("button", { name: "Search", exact: true })).toBeDisabled();
     });
 
     test("explains that a document with no extractable text needs a text-based PDF", async ({ page }) => {
@@ -141,6 +142,26 @@ test.describe("declared limits", () => {
         await expect(page.locator("footer p")).toContainText("side-by-side text on page 1");
     });
 
+    test("reads a two-column page down one column and then the next", async ({ page }) => {
+        // Reading across the gutter does not merely reorder the text, it interleaves it: the left
+        // column's sentence is cut and the right column's inserted into it. Every passage built
+        // from that is nonsense, so this checks the extracted text, not just the warning.
+        await open(page, TWO_COLUMN);
+        await page.waitForFunction(() => document.querySelectorAll(".textLayer span").length > 20);
+
+        await page.getByRole("button", { name: "View extracted text" }).click();
+        const texts = await page.locator("article > p").evaluateAll((nodes) => nodes.map((node) => node.textContent ?? ""));
+
+        expect(texts.length).toBeGreaterThan(1);
+        const fused = texts.filter((text) => text.includes("左第") && text.includes("右第"));
+        expect(fused, "a passage carries both columns").toEqual([]);
+
+        // And the order is column by column: every left-column passage precedes every right one.
+        const lastLeft = texts.findLastIndex((text) => text.includes("左第"));
+        const firstRight = texts.findIndex((text) => text.includes("右第"));
+        expect(firstRight).toBeGreaterThan(lastLeft);
+    });
+
     test("says the layout was not fully understood when a search finds nothing", async ({ page }) => {
         await page.route("**/api/search", async (route) => {
             const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string };
@@ -160,9 +181,9 @@ test.describe("declared limits", () => {
         await open(page, TWO_COLUMN);
         await page.waitForFunction(() => document.querySelectorAll(".textLayer span").length > 5);
 
-        await page.locator('label:has-text("Meaning")').click();
+        await page.getByRole("radio", { name: "Meaning" }).click();
         await page.getByLabel("Search query").fill("ログインの方法は");
-        await page.getByRole("button", { name: "Search" }).click();
+        await page.getByRole("button", { name: "Search", exact: true }).click();
 
         // Separate from "could not be searched": these pages were searched, just not understood.
         await expect(page.getByText("does not fully support")).toBeVisible();
@@ -198,13 +219,13 @@ test.describe("declared limits", () => {
 
         await open(page, BLANK_PAGE);
         await page.waitForFunction(() => document.querySelectorAll(".textLayer span").length > 5);
-        await page.locator('label:has-text("Meaning")').click();
+        await page.getByRole("radio", { name: "Meaning" }).click();
 
         await page.getByLabel("Search query").type("解約したらお金は戻りますか", { delay: 30 });
         await page.waitForTimeout(1200);
         expect(requests).toBe(0);
 
-        await page.getByRole("button", { name: "Search" }).click();
+        await page.getByRole("button", { name: "Search", exact: true }).click();
         await expect(page.locator("ol li")).not.toHaveCount(0);
         expect(requests).toBe(1);
 

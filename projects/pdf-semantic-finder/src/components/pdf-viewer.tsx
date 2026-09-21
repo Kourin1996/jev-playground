@@ -24,6 +24,8 @@ export type PdfViewerProps = {
     highlightedHit: SearchHit | null;
     /** Reported when a segment cannot be located; the result is kept and the failure shown. */
     onHighlightFailure: (failure: HighlightTargetFailure | null) => void;
+    /** The page filling most of the viewport, so the reader can be told where they are. */
+    onVisiblePageChange?: (pageNumber: number) => void;
 };
 
 type PageRecord = {
@@ -101,7 +103,7 @@ const applyPageVariables = (container: HTMLElement, scale: number, userUnit: num
     container.style.setProperty("--scale-round-y", `${roundY}px`);
 };
 
-export const PdfViewer = ({ document, pages, scale, highlightedHit, onHighlightFailure }: PdfViewerProps) => {
+export const PdfViewer = ({ document, pages, scale, highlightedHit, onHighlightFailure, onVisiblePageChange }: PdfViewerProps) => {
     const rootRef = useRef<HTMLDivElement>(null);
     const recordsRef = useRef<Map<number, PageRecord>>(new Map());
     const highlightedElementsRef = useRef<AppliedHighlight[]>([]);
@@ -254,7 +256,22 @@ export const PdfViewer = ({ document, pages, scale, highlightedHit, onHighlightF
         }
     }, [scale, renderGeneration]);
 
-    const scrollToPage = useCallback((pageNumber: number) => {
+    /**
+     * Brings the passage itself into view, falling back to the top of its page.
+     *
+     * Scrolling to the page was not enough: a page is taller than the pane at any readable zoom, so
+     * a clause near its foot landed off-screen or clipped by the bottom edge, and the reader had to
+     * hunt for the highlight the search had just found for them. Centring the first highlighted
+     * span puts the passage where the eye already is and still shows the page around it.
+     */
+    const scrollToHit = useCallback((pageNumber: number, highlighted: readonly AppliedHighlight[]) => {
+        // The text item, which is the highlighted span itself for a whole-item range and its
+        // parent for a narrower one — within a line either way.
+        const passage = highlighted[0]?.element;
+        if (passage !== undefined) {
+            passage.scrollIntoView({ behavior: "smooth", block: "center" });
+            return;
+        }
         recordsRef.current.get(pageNumber)?.container.scrollIntoView({ behavior: "smooth", block: "start" });
     }, []);
 
@@ -291,9 +308,47 @@ export const PdfViewer = ({ document, pages, scale, highlightedHit, onHighlightF
 
         if (scrolledToRef.current !== highlightedHit.key) {
             scrolledToRef.current = highlightedHit.key;
-            scrollToPage(highlightedHit.pageNumber);
+            scrollToHit(highlightedHit.pageNumber, highlightedElementsRef.current);
         }
-    }, [highlightedHit, pages, renderGeneration, onHighlightFailure, scrollToPage]);
+    }, [highlightedHit, pages, renderGeneration, onHighlightFailure, scrollToHit]);
+
+    /*
+     * Which page the reader is on, so the zoom row can say so without them consulting the results
+     * panel. Observed rather than computed from scroll position: the page heights differ, and a
+     * page is "the one being read" when most of the viewport is showing it.
+     */
+    useEffect(() => {
+        const root = rootRef.current;
+        if (root === null || onVisiblePageChange === undefined) return;
+
+        const visible = new Map<number, number>();
+        const observer = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    const pageNumber = Number((entry.target as HTMLElement).dataset.pageNumber);
+                    if (Number.isFinite(pageNumber)) visible.set(pageNumber, entry.intersectionRatio);
+                }
+
+                const best = [...visible.entries()].filter(([, ratio]) => ratio > 0).sort((a, b) => b[1] - a[1] || a[0] - b[0])[0];
+                if (best !== undefined) onVisiblePageChange(best[0]);
+            },
+            { root: root.parentElement, threshold: [0, 0.1, 0.25, 0.5, 0.75, 1] },
+        );
+
+        const watch = () => {
+            for (const container of root.querySelectorAll<HTMLElement>(".pdf-finder-page")) observer.observe(container);
+        };
+
+        watch();
+        // Pages are appended as they render, so the set to watch grows after this effect runs.
+        const mutations = new MutationObserver(watch);
+        mutations.observe(root, { childList: true });
+
+        return () => {
+            observer.disconnect();
+            mutations.disconnect();
+        };
+    }, [document, onVisiblePageChange]);
 
     return <div ref={rootRef} className={cx("flex flex-col items-center gap-6 p-6")} />;
 };

@@ -222,20 +222,45 @@ describe("limit checks", () => {
     });
 
     it("can evaluate a document at the segment cap within the deadline it declares", () => {
-        // Capacity has to be servable, not just declarable: changing the cap or the batch size
-        // without the arithmetic would promise a search the deadline cannot finish.
-        //
-        // The comparison is against a measured round-trip rather than a round number. A real
-        // search of `assets/bitcoin.pdf` — 112 segments, 15 requests, 3 rounds — completed in
-        // 1,361 ms, so a round-trip runs about 450 ms against the live provider.
-        const observedRoundTripMs = 450;
-        const batches = Math.ceil(LIMITS.maxSegmentCount / LIMITS.maxSegmentsPerBatch);
-        const rounds = Math.ceil(batches / LIMITS.maxConcurrentRequests);
-        const budgetPerRound = LIMITS.searchDeadlineMs / rounds;
+        /*
+         * Measured end to end rather than derived from a per-request guess. A 48-page fixture of
+         * 1,872 units — 94% of the cap — completed in 7,148 / 7,330 / 7,390 ms through the real
+         * provider at the declared concurrency, over 468 requests. Three runs varied by 3%.
+         *
+         * The earlier version of this test multiplied a 450 ms per-request figure taken from a
+         * three-round search of a nine-page document, where fixed latency dominates. Thirty rounds
+         * of a real document say more than three, so the margin below is smaller and the evidence
+         * behind it is larger.
+         */
+        const measured = { segments: 1_872, elapsedMs: 7_390 };
+        const projectedAtCap = (measured.elapsedMs / measured.segments) * LIMITS.maxSegmentCount;
 
-        // Twice the observed time, so a slower document or one retry still fits. Unmeasured at the
-        // cap itself: no fixture comes anywhere near 500 segments.
-        expect(budgetPerRound).toBeGreaterThanOrEqual(observedRoundTripMs * 2);
+        // Half again the measured time still fits, which covers a slower document and the one
+        // retry §6.4 allows.
+        expect(projectedAtCap * 1.5).toBeLessThanOrEqual(LIMITS.searchDeadlineMs);
+    });
+
+    it("declares no more capacity than the provider's token rate can deliver", () => {
+        /*
+         * Concurrency cannot buy a time below this, so a cap whose input could not be delivered
+         * inside the deadline would be undeliverable however the requests were arranged.
+         *
+         * 602 input tokens per unit measured on the same fixture (1,126,884 over 1,872 units), and
+         * 250,000 tokens a second from the provider's published rate limit.
+         */
+        const inputTokensAtCap = LIMITS.maxSegmentCount * 602;
+        const floorMs = (inputTokensAtCap / 250_000) * 1_000;
+
+        expect(floorMs).toBeLessThan(LIMITS.searchDeadlineMs / 2);
+    });
+
+    it("accepts a request body a document at the character cap can actually produce", () => {
+        // Each segment's text travels three times: as itself and as both neighbours' context.
+        // Under 256 KiB the Worker rejected a full-size Japanese document the client had already
+        // accepted, and the reader saw a search error instead of a limit message.
+        const worstCaseBytes = 3 * LIMITS.maxExtractedCharacters * 4 + LIMITS.maxSegmentCount * 80;
+
+        expect(LIMITS.maxRequestBodyBytes).toBeGreaterThanOrEqual(worstCaseBytes);
     });
 
     it("reports the segment cap for a document that is short but heavily divided", () => {
@@ -296,26 +321,73 @@ describe("buildSearchRequest", () => {
 
 describe("requestSemanticSearch", () => {
     const request = { documentId: "doc-1", requestId: "req-1", query: "q", segments: [{ id: "p001-s001", text: "本文" }] };
+    const line = (message: unknown) => `${JSON.stringify(message)}\n`;
+    const finalMessage = {
+        type: "final",
+        documentId: "doc-1",
+        requestId: "req-1",
+        status: "matched",
+        results: [{ segmentId: "p001-s002", score: 2, relevantProbability: 0.97, confidence: 0.9 }],
+        evaluatedSegmentCount: 2,
+        model: "jev-1.13.0",
+        elapsedMs: 10,
+    };
+    const progress = (evaluated: number) => ({ type: "progress", documentId: "doc-1", requestId: "req-1", evaluated, total: 12, results: [] });
 
-    it("returns the response on success", async () => {
-        const response = {
-            documentId: "doc-1",
-            requestId: "req-1",
-            status: "matched",
-            results: [],
-            evaluatedSegmentCount: 1,
-            model: "jev-1.13.0",
-            elapsedMs: 10,
-        };
+    /** A `/api/search` answer delivered a chunk at a time, the way the Worker sends it. */
+    const streamed = (chunks: readonly string[]) =>
+        new Response(
+            new ReadableStream<Uint8Array>({
+                start(controller) {
+                    const encoder = new TextEncoder();
+                    for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+                    controller.close();
+                },
+            }),
+            { status: 200, headers: { "Content-Type": "application/x-ndjson" } },
+        );
+
+    it("returns the final line on success", async () => {
         vi.stubGlobal(
             "fetch",
-            vi.fn(async () => Response.json(response)),
+            vi.fn(async () => streamed([line(progress(4)), line(finalMessage)])),
         );
 
         const outcome = await requestSemanticSearch(request, new AbortController().signal);
 
         expect(outcome.ok).toBe(true);
-        if (outcome.ok) expect(outcome.response).toEqual(response);
+        // `type` belongs to the stream, not to the result.
+        if (outcome.ok) expect(outcome.response).toEqual({ ...finalMessage, type: undefined });
+    });
+
+    it("reports each progress line before the final one", async () => {
+        // The whole point of the stream: at the segment cap the search is 500 round-trips deep and
+        // takes about five seconds, while the first answers come back in under half a second.
+        const seen: number[] = [];
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => streamed([line(progress(4)), line(progress(8)), line(finalMessage)])),
+        );
+
+        await requestSemanticSearch(request, new AbortController().signal, (update) => seen.push(update.evaluated));
+
+        expect(seen).toEqual([4, 8]);
+    });
+
+    it("reassembles a line split across chunks", async () => {
+        // The body arrives in whatever pieces the network hands over, which need not be lines.
+        const whole = line(progress(4)) + line(finalMessage);
+        const cut = Math.floor(whole.length / 3);
+        const seen: number[] = [];
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => streamed([whole.slice(0, cut), whole.slice(cut, cut * 2), whole.slice(cut * 2)])),
+        );
+
+        const outcome = await requestSemanticSearch(request, new AbortController().signal, (update) => seen.push(update.evaluated));
+
+        expect(seen).toEqual([4]);
+        expect(outcome.ok).toBe(true);
     });
 
     it("surfaces the application error code, never a no-match", async () => {
@@ -330,10 +402,38 @@ describe("requestSemanticSearch", () => {
         if (!outcome.ok) expect(outcome.code).toBe("provider_timeout");
     });
 
+    it("surfaces an error that arrives after the headers", async () => {
+        // A streamed body has already sent 200 by the time a batch fails, so the failure travels
+        // as a line. It must still not become a no-match (spec §9.2).
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => streamed([line(progress(4)), line({ type: "error", error: { code: "incomplete_evaluation", message: "…" } })])),
+        );
+
+        const outcome = await requestSemanticSearch(request, new AbortController().signal);
+
+        expect(outcome.ok).toBe(false);
+        if (!outcome.ok) expect(outcome.code).toBe("incomplete_evaluation");
+    });
+
+    it("treats a stream that stops before the final line as a failure", async () => {
+        // A connection dropped halfway has evaluated part of the document. Reporting what it found
+        // would be reporting a search that never finished.
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => streamed([line(progress(4))])),
+        );
+
+        const outcome = await requestSemanticSearch(request, new AbortController().signal);
+
+        expect(outcome.ok).toBe(false);
+        if (!outcome.ok) expect(outcome.code).toBe("provider_malformed_response");
+    });
+
     it("treats an unreadable body as a malformed response", async () => {
         vi.stubGlobal(
             "fetch",
-            vi.fn(async () => new Response("not json", { status: 200 })),
+            vi.fn(async () => streamed(["not json\n"])),
         );
 
         const outcome = await requestSemanticSearch(request, new AbortController().signal);
@@ -343,7 +443,7 @@ describe("requestSemanticSearch", () => {
     });
 
     it("passes the abort signal through so a superseded search can be cancelled", async () => {
-        const fetchImpl = vi.fn(async () => Response.json({}));
+        const fetchImpl = vi.fn(async () => streamed([line(finalMessage)]));
         vi.stubGlobal("fetch", fetchImpl);
         const controller = new AbortController();
 

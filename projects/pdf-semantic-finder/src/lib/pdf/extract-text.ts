@@ -242,9 +242,9 @@ const MULTI_COLUMN_SHARE = 0.5;
 /**
  * True when most of a page's baselines carry more than one block of text.
  *
- * After the gutter split, two columns show up as two lines at the same y. Spec §2 does not claim
- * to handle that layout: the split keeps the text from fusing, but the reading order between
- * columns is still row-by-row, so the page is reported rather than silently trusted.
+ * After the gutter split, two columns show up as two lines at the same y. The page is reported to
+ * the reader either way (spec §10), because the column detection is a heuristic and a page it gets
+ * wrong is a page whose reading order is wrong.
  */
 export const looksMultiColumn = (lines: readonly ExtractedLine[]): boolean => {
     if (lines.length === 0) return false;
@@ -257,6 +257,43 @@ export const looksMultiColumn = (lines: readonly ExtractedLine[]): boolean => {
 
     const shared = [...perBaseline.values()].filter((count) => count > 1).length;
     return shared / perBaseline.size >= MULTI_COLUMN_SHARE;
+};
+
+/**
+ * Reorders a page's lines to read down one column and then down the next.
+ *
+ * Sorting by baseline alone reads a two-column page across the gutter, one row at a time, which
+ * does not merely reorder the text — it **interleaves** it. The generated two-column fixture came
+ * out as `左第1項 …甲および⼄が別` + the whole of `右第1項 …` + `途協議のうえ決定するものとする。`:
+ * the left column's sentence cut in half with the right column's sentence inserted into it. Every
+ * passage built from that is nonsense, and so is every judgement made about one.
+ *
+ * The runs are already split at the gutter by `groupItemsIntoLines`, so each one sits inside a
+ * single column. Grouping their left edges by the same gutter width recovers the columns, and
+ * reading order is then column by column, each top to bottom.
+ *
+ * What this does not do: a heading that spans the full width sits in the first column's group and
+ * is read before both columns rather than between them, and a page whose columns do not line up
+ * into clean left edges is left in baseline order. Both are visible in the debug view, and the
+ * page is reported as multi-column regardless.
+ */
+export const orderByColumn = (lines: readonly ExtractedLine[], pageFontSize: number): ExtractedLine[] => {
+    if (lines.length === 0) return [];
+
+    const gutter = COLUMN_GAP_RATIO * (pageFontSize > 0 ? pageFontSize : 1);
+    const lefts = [...new Set(lines.map((line) => line.x))].sort((a, b) => a - b);
+
+    // Each jump wider than a gutter starts a new column.
+    const boundaries: number[] = [];
+    for (let index = 1; index < lefts.length; index += 1) {
+        if (lefts[index] - lefts[index - 1] > gutter) boundaries.push(lefts[index]);
+    }
+
+    if (boundaries.length === 0) return [...lines];
+
+    const columnOf = (line: ExtractedLine) => boundaries.filter((boundary) => line.x >= boundary).length;
+
+    return lines.map((line) => ({ ...line, column: columnOf(line) })).sort((a, b) => a.column - b.column || b.y - a.y);
 };
 
 export type ExtractPdfOptions = {
@@ -290,8 +327,12 @@ export const extractPdfText = async (bytes: Uint8Array, options: ExtractPdfOptio
         // Item transforms are in unrotated page space, so baseline grouping is meaningless on a
         // quarter-turned page. Such a page is reported rather than segmented into nonsense.
         const isRotated = page.rotate % 180 !== 0;
-        const lines = isRotated ? [] : groupItemsIntoLines(textContent.items.filter(isTextItem));
-        const isMultiColumn = looksMultiColumn(lines);
+        const items = textContent.items.filter(isTextItem);
+        const baselineOrder = isRotated ? [] : groupItemsIntoLines(items);
+        const isMultiColumn = looksMultiColumn(baselineOrder);
+        // Reading across the gutter interleaves the columns' sentences, so a page that looks
+        // columned is read column by column instead.
+        const lines = isMultiColumn ? orderByColumn(baselineOrder, medianOf(items.map(fontSizeOf))) : baselineOrder;
         const characterCount = lines.reduce((total, line) => total + [...line.text].length, 0);
 
         if (isRotated) rotatedPages.push(pageNumber);

@@ -24,30 +24,31 @@ The example text is fictional and intended only for demonstrations.
 
 ## 2. Scope
 
-| Area                        | PoC requirement                                                                                                                      |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Delivery                    | Standalone web app; no browser extension or Acrobat plugin                                                                           |
-| Documents                   | One PDF at a time                                                                                                                    |
-| File limit                  | 10 MB and 50 physical pages                                                                                                          |
-| Extracted content           | At most 100,000 characters and 1,000 searchable segments. The character limit is `maxPageCount × 2,000`, so the two move together    |
-| Supported PDFs              | Extractable text, horizontal writing, single-column layout; a page that appears to be multi-column is reported, not silently trusted |
-| Primary evaluation language | Japanese                                                                                                                             |
-| Search unit                 | A paragraph or short group of lines, called a segment                                                                                |
-| Results                     | Up to three results ordered by relevance                                                                                             |
-| Highlighting                | The complete selected segment for a meaning result; exact search highlights the matched characters                                   |
-| Persistence                 | PDF bytes, text, mappings, and results remain in browser memory only                                                                 |
+| Area                        | PoC requirement                                                                                                                                                                          |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Delivery                    | Standalone web app; no browser extension or Acrobat plugin                                                                                                                               |
+| Documents                   | One PDF at a time                                                                                                                                                                        |
+| File limit                  | 10 MB and 50 physical pages                                                                                                                                                              |
+| Extracted content           | At most 200,000 characters and 2,000 searchable segments. The character limit is `maxPageCount × 4,000`, so the two move together                                                        |
+| Supported PDFs              | Extractable text and horizontal writing. A page that appears to be two-column is read down one column and then the next, and reported to the reader because the detection is a heuristic |
+| Primary evaluation language | Japanese                                                                                                                                                                                 |
+| Search unit                 | A paragraph or short group of lines, called a segment                                                                                                                                    |
+| Results                     | Up to three results ordered by relevance                                                                                                                                                 |
+| Highlighting                | The complete selected segment for a meaning result; exact search highlights the matched characters                                                                                       |
+| Persistence                 | PDF bytes, text, mappings, and results remain in browser memory only                                                                                                                     |
 
-The page limit and the character limit are derived from one another: 2,000 characters a page is the
-density of an ordinary Japanese document, measured against 3,853 on a deliberately dense fixture and
-2,351 on the Bitcoin whitepaper. A page limit without a matching character limit is not a page limit
-— at 50 pages and 50,000 characters a document had to average 1,000 characters a page to be
-accepted, so the ordinary case was rejected on characters and the page number meant nothing.
+The page limit and the character limit are derived from one another: 4,000 characters a page, so a
+page limit cannot be met by a document that is refused on characters. The density was first set at
+2,000 from the fixtures in this repository — 2,351 on the Bitcoin whitepaper, 3,853 on a
+deliberately dense generated contract — and a reader's own 42-page PDF then arrived at **3,613
+characters a page**, 151,728 in total, and was refused. Fixtures built to exercise a limit are not
+a sample of what people open, so the density now has margin over the densest real document seen.
 
-**What stops it going further than 50.** Not the API bill, which is $0.03 a search at the cap
-(§14.20). The viewer renders every page eagerly, so 50 pages hold 92 MB of canvas at 100% zoom and
-827 MB at the 300% maximum — measured, and the document stayed usable, but it is the number that
-would decide any further increase. Beyond that the 15-second deadline binds: 100 pages of dense
-Japanese would need about 700 requests and 24 seconds.
+**What stops it going further than 50 pages.** Not the API bill: a search at the cap costs about
+$0.05 (§14.20). Not the deadline: 1,872 units measured 7.1–7.4 s against 15 s. The viewer renders
+every page eagerly, so 50 pages hold 92 MB of canvas at 100% zoom and 827 MB at the 300% maximum —
+measured, and the document stayed usable, but it is the number that would decide any further
+increase.
 
 ### Out of scope
 
@@ -67,21 +68,24 @@ Jev accepts text, so PDF parsing remains a separate browser-side process.
 The page has a top search area, a results panel on the left, and a PDF viewer on the right. Use a quiet, light design based on Untitled UI React components.
 
 ```text
-┌──────────────────────────────────────────────────────────┐
-│ PDF Semantic Finder     [View extracted text] [Open PDF] │
-├──────────────────────────────────────────────────────────┤
-│ [If I cancel halfway, do I get my money back?] [Search]  │
-│  ○ Exact text     ● Meaning                              │
-├────────────────────┬─────────────────────────────────────┤
-│ Results            │             PDF viewer              │
-│ 1. Page 3          │  Fees already paid will not be      │
-│ Fees already paid… │  refunded…  ← highlighted           │
-│ 2. Page 4          │                                     │
-│ However…           │               [−] 100% [+]           │
-│ [Previous] [Next]  │                                     │
-├────────────────────┴─────────────────────────────────────┤
-│ demo.pdf · 5 pages · 24 searchable segments              │
-└──────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│ PDF Semantic Finder  demo.pdf · 5 pages         [Open PDF] │
+├────────────────────────────────────────────────────────────┤
+│ [If I cancel halfway, do I get my money back?]  [ Search ] │
+│ [ Exact text |*Meaning* ]  (i) Sends your query and the... │
+├────────────────────┬───────────────────────────────────────┤
+│ 2 results  [<] [>] |          PDF viewer                   │
+│*1. Page 3     72%  | Fees already paid will not            │
+│*Fees already paid. | be refunded...  <- highlighted        │
+│ 2. Page 4     41%  |                                       │
+│ However...         |                                       │
+│                    | (the divider drags)                  │
+├────────────────────┴───────────────────────────────────────┤
+│ [View extracted text]        2 / 5   [-] Fit 138% [+]      │
+├────────────────────────────────────────────────────────────┤
+│ 24 searchable segments · extracted in 412 ms ·             │
+│ searched in 1,180 ms · 24 Jev questions in 6 API calls     │
+└────────────────────────────────────────────────────────────┘
 ```
 
 | Action                       | Behavior                                                                                                                                                                                                                                                               |
@@ -92,13 +96,37 @@ The page has a top search area, a results panel on the left, and a PDF viewer on
 | Press Enter or select Search | Run the selected mode; make no API call while typing                                                                                                                                                                                                                   |
 | Select Meaning               | Send all searchable segments to the application API for Jev evaluation                                                                                                                                                                                                 |
 | Select Exact text            | Search locally; do not call Jev                                                                                                                                                                                                                                        |
-| Select a result              | Open its physical page; highlight the segment for a meaning result, or the matched characters for an exact one                                                                                                                                                         |
+| Select a result              | Scroll the passage itself into view on its physical page; highlight the segment for a meaning result, or the matched characters for an exact one                                                                                                                       |
 | Expand a result's context    | Show the neighbouring passages that were sent with it, and open either of them. Labelled as what was sent, never as what the model used — the response does not report which context influenced the answer                                                             |
-| Select Previous or Next      | Move through existing results without another API call                                                                                                                                                                                                                 |
+| Select Previous or Next      | Move through existing results without another API call. The controls sit at the head of the list, beside the result count                                                                                                                                              |
+| Drag the panel divider       | Resize the results panel against the viewer; also operable from the keyboard                                                                                                                                                                                           |
+| Adjust zoom                  | The viewer opens fitted to the width of its pane; the zoom controls adjust from there and the percentage returns to fitting. A page indicator beside them names the page currently in view                                                                             |
 | Open another PDF             | Discard the previous document, request, results, and highlight                                                                                                                                                                                                         |
 | Select View extracted text   | Show segment order, IDs, pages, extracted text, the context sent with each passage, and — after a meaning search — what every segment was judged to be, including the ones no result names. Layered over the viewer, which stays mounted so the reader's place is kept |
 
-Each result shows the physical page number and original extracted text. “Page 3” means the third page in the file, regardless of printed page numbers. Do not show generated explanations or unsupported precision such as “98% match.”
+Each result shows the physical page number and original extracted text. “Page 3” means the third page in the file, regardless of printed page numbers. Do not show generated explanations.
+
+A meaning result also shows the two numbers the provider returned for that passage — the probability
+it assigned to the highest relevance level, and its own certainty in that probability. The list
+carries a persistent **Model judgment** line saying what they are and that they are not a measured
+match; the caveat is on screen in text rather than in a hover tooltip, which a touch or keyboard
+reader never reaches. Terms of the query that appear literally in a passage are emphasised in the
+preview; nothing else is, because the response does not say which words it read.
+
+This replaces an earlier prohibition on showing a percentage at all. The prohibition was aimed at
+“98% match”, which claims a measurement of similarity the system does not make, and it is still in
+force in that form: what is shown is not presented as how well the passage matches. The reason for
+showing it anyway is §14.19 — the same passage crossed all three §7 bands depending on which other
+passages shared its request. A reader who cannot see the number has no way to tell a passage the
+model was sure about from one that landed in the list at 0.36, which is exactly the case where the
+verdict is least stable. The label says “confident”, “unsure” or “weak” and names the certainty
+separately, so the number is read as the model's opinion rather than as a score for the passage.
+
+The status bar carries the operational figures and nothing about the document's content: how long
+extraction and the search took, how many segments were searchable, and what the last meaning search
+cost in Jev questions and in API calls. The two cost figures are separate because they bill
+separately — §14.20 measures per request, and a document twice the size is twice the questions but
+not necessarily twice the requests.
 
 ## 4. System design
 
@@ -249,7 +277,7 @@ The example model is pinned for reproducible PoC evaluation. Confirm its availab
 | ------------------------ | ----------------------------------------------------------- |
 | Passages per Jev request | Exactly 4, or the whole document when it has fewer          |
 | Text per batch           | At most 10,000 characters including context                 |
-| Concurrent Jev requests  | At most 16 (see §14.1 for the arithmetic against the cap)   |
+| Concurrent Jev requests  | At most 24, set from a measured sweep (§14.21)              |
 | Whole-search deadline    | 15 seconds                                                  |
 | Automatic retry          | Once for a transient failure, within the same deadline      |
 | Partial batch failure    | Fail the search; never treat partial evaluation as no match |
@@ -344,6 +372,12 @@ type SearchResponse = {
 };
 ```
 
+The response is **newline-delimited JSON**, not one object: a `progress` line as each batch lands
+and exactly one `final` line carrying the body above. A progress line has an evaluated count, a
+total and the passages currently scoring highest, and deliberately **no status** — §7 classifies
+over every segment, so a verdict before the last batch is a claim the search has not earned. An
+error after the headers travels as a final `error` line and is treated exactly as a non-2xx body.
+
 Do not send the PDF binary, page number, filename, or browser display references. Failed searches return a non-2xx status with a stable application error code and safe fixed message; they must not become `no_match`.
 
 ### 9.3 Validation and concurrency
@@ -352,7 +386,7 @@ The Worker validates:
 
 - a nonempty query of at most 200 characters;
 - unique, well-formed segment IDs;
-- at most 1,000 segments;
+- at most 2,000 segments;
 - nonempty target text of at most 800 characters per segment;
 - aggregate extracted-text limits and a 1 MiB request-body limit, derived in §14.1;
 - one valid Jev answer for every requested segment;
@@ -439,7 +473,7 @@ who had read the document first. It says the mechanism reaches the intended pass
 calibrate §7's thresholds, which would need enough queries falling near 0.35 and 0.65 to show where
 they belong. Nor does it cover a document neither party has seen.
 
-### 11.2 Functional behavior### 11.2 Functional behavior
+### 11.2 Functional behavior
 
 | Test                         | Pass condition                                                |
 | ---------------------------- | ------------------------------------------------------------- |
@@ -450,6 +484,8 @@ they belong. Nor does it cover a document neither party has seen.
 | Replace the PDF              | Results from the previous PDF cannot reappear                 |
 | API failure                  | UI shows a search error, not no match                         |
 | Exact mode                   | No request is made to the semantic-search endpoint            |
+| Meaning result judgement     | Shows the provider's own probability and certainty, labelled  |
+| Fit to width                 | The viewer opens fitted, and the percentage returns to fitted |
 
 ### 11.3 Performance
 
@@ -604,19 +640,21 @@ remain independent, both enforced before search (`check-limits.ts`, and again in
 either can reject a document the other would admit.
 
 **What the cap costs elsewhere.** More units means more requests, and §14.19 forced the batch down
-from 8 passages to 4, which doubles them again. At the cap that is `ceil(1,000 / 4) = 250`
-requests; `maxConcurrentRequests` is 16, so 16 rounds, leaving about 940 ms per round-trip inside
-the 15 s deadline. Measured round-trips are 450 ms on the English whitepaper and 270 ms on a dense
-Japanese document, which is what the arithmetic is checked against — at 8 concurrent the same cap
-would need 32 rounds and 470 ms each, which the measurements do not support.
+from 8 passages to 4, which doubles them again. At the cap that is `ceil(2,000 / 4) = 500` requests
+at a concurrency of 16, so 32 rounds.
 
-**Measured near the cap.** `tests/fixtures/sample-near-limit-ja.pdf` — **48 pages, 672 units**,
-inside every declared limit and close to both — produces 168 requests and completed in
-**3,144 / 2,763 / 2,851 ms** over three runs, all well inside the 15-second deadline. Extraction
-took 298 ms.
+That is no longer checked by multiplying a per-request estimate. A 48-page fixture of 1,872 units —
+94% of the cap — was measured end to end at **7,148 / 7,330 / 7,390 ms**, which projects to about
+7.9 s at the cap against a 15 s deadline. Raising the concurrency further would not help: the
+provider's 250,000 tokens a second puts a floor of 4.8 s on the cap's 1.2 M input tokens, and the
+measured search already runs at 154,000 tokens a second.
 
-Still unmeasured: a document at the 1,000-unit cap itself, and what happens when a request is
-rate-limited and spends its one retry.
+**Measured near the cap.** `tests/fixtures/sample-near-limit-ja.pdf` — **48 pages, 1,872 units**,
+94% of the segment cap and inside every other limit — produces 468 requests and completed in
+**7,148 / 7,330 / 7,390 ms** over three runs. Extraction took 350 ms.
+
+Still unmeasured: the cap itself, and what happens when a request is rate-limited and spends its
+one retry.
 
 **Request size.** Each unit's text travels three times — as itself and as each neighbour's context
 — so the worst case is `3 × 50,000` characters. At 4 UTF-8 bytes each plus about 80 bytes of JSON
@@ -908,17 +946,34 @@ tests read the highlight from the document rather than holding a handle to it.
 Offsets still come from the extraction structure, never from a search of the rendered page, so
 §8's prohibition holds unchanged.
 
-### 14.18 A multi-column page is now actually reported
+### 14.18 A multi-column page is read by column, not across the gutter
 
-§2 restricts supported PDFs to single-column layouts. Extraction detects a page whose baselines
-mostly carry side-by-side blocks and splits at the gutter so the columns do not fuse into one
-sentence — but the reading order between them is still row by row.
+§2 used to restrict supported PDFs to single-column layouts, and extraction split each baseline at
+the gutter so the columns did not run together inside one line. The note here claimed that left
+the reading order "row by row". That was too kind to it.
 
-That detection existed, and two code comments claimed the page "is reported rather than silently
-trusted". Nothing reported it: the list reached no part of the interface. It is now named in the
-status bar, and named again with an empty result, kept separate from the pages that could not be
-searched because these pages **were** searched — saying otherwise would be untrue. Pinned by
-`tests/limits.spec.ts` against a generated two-column fixture.
+Reading a two-column page by baseline does not reorder the text, it **interleaves** it. The
+generated fixture came out as:
+
+```
+左第1項 …甲および⼄が別 │ 右第1項 …甲および⼄が別途協議のうえ決定するものとする。 │ 途協議のうえ決定するものとする。
+```
+
+The left column's sentence is cut in half and the right column's whole sentence inserted into it.
+Every passage built from that is nonsense, and so is every judgement made about one — the search
+was returning confident answers about text the document does not contain.
+
+`orderByColumn` now groups the runs by their left edges, using the same gutter width that split
+them, and reads column by column. A change of column is a hard segment boundary, like a page break:
+the last line of the left column and the first of the right are adjacent in reading order and
+belong to different passages. `tests/limits.spec.ts` checks the extracted text of the fixture, not
+just the warning.
+
+Two limits, both visible in the debug view: a heading that spans the full width sits in the first
+column's group and is read before both columns rather than between them, and a page whose columns
+do not resolve into clean left edges is left in baseline order. The page is still reported to the
+reader either way, because the detection is a heuristic and a page it gets wrong is a page whose
+reading order is wrong.
 
 ### 14.19 Measured: the state moves an uncertain score, and a uniform passage count does not fix it
 
@@ -1013,10 +1068,10 @@ Measured against the real provider, one search each, at the limits in force at t
 | -------------------------- | ---------: | ----: | -------: | -----------: | -----: | -------: |
 | `assets/bitcoin.pdf`, 9 pp |     21,155 |    86 |       22 |       45,440 |  2,066 | 1,338 ms |
 | Japanese contract, 3 pp    |      1,469 |    13 |        4 |       10,542 |    315 |   234 ms |
-| Near-limit Japanese, 48 pp |     92,000 |   672 |      168 |      541,632 | 16,128 | 2,851 ms |
+| Near-limit Japanese, 48 pp |    135,549 | 1,872 |      468 |    1,126,884 | 44,928 | 5,196 ms |
 
 TypeSafe AI charges **$42 per billion input tokens and nothing for output**, so a search at the
-1,000-unit cap costs about **$0.03**. Money is not what bounds this product.
+2,000-unit cap costs about **$0.05**. Money is not what bounds this product.
 
 **Where the input goes.** A four-passage request measured 3,092 input tokens on dense Japanese:
 2,048 for the state and 1,044 for the four instruction strings, which is 261 tokens a question.
@@ -1025,17 +1080,56 @@ so the context is roughly 44% of the input. Raising `maxSegmentsPerBatch` to 8 w
 instruction share and cut input tokens by about a quarter, and §14.19 is the reason it is 4: the
 saving would be paid for in the judgement.
 
-**What actually bounds the page limit.** Measured at 48 pages:
+**What actually bounds the page limit.** Measured at 48 pages and 1,872 units:
 
-| Constraint            | At 48 pages                    | Headroom                                   |
-| --------------------- | ------------------------------ | ------------------------------------------ |
-| Search deadline       | 2.9 s against 15 s             | Comfortable                                |
-| Request body          | ~1.1 MB against 2 MiB          | Comfortable                                |
-| Canvas memory at 100% | 92 MB                          | Fine                                       |
-| Canvas memory at 300% | **827 MB**                     | Measured, still usable, and the real bound |
-| Provider request rate | 168 requests, 1,200/min budget | One search is fine; three at once are not  |
+| Constraint            | At 48 pages                        | Headroom                                   |
+| --------------------- | ---------------------------------- | ------------------------------------------ |
+| Search deadline       | 5.2–5.5 s against 15 s             | Comfortable                                |
+| Time to first passage | 338–664 ms, because it is streamed | Comfortable                                |
+| Request body          | ~1.6 MB against 4 MiB              | Comfortable                                |
+| Canvas memory at 100% | 92 MB                              | Fine                                       |
+| Canvas memory at 300% | **827 MB**                         | Measured, still usable, and the real bound |
+| Provider token rate   | 222k/s against a 250k/s budget     | One search fits; two at once do not        |
 
 The viewer renders every page eagerly — no virtualisation — and canvas memory grows with the
 square of the zoom. That is what would have to change before the page limit went further, not the
 bill and not the deadline. For reference, 100 pages of dense Japanese was estimated at about 700
 requests, 24 seconds and 1.7 GB of canvas at maximum zoom.
+
+### 14.21 Why a search felt slow, and what streaming it changed
+
+A 48-page document took **7.2 seconds** before anything appeared. The cause is arithmetic, not
+overhead: 1,872 units at four passages a request is 468 round-trips, each measured at a median of
+**236 ms** (186–647), run 16 at a time. Nothing in this repository contributes to it measurably.
+
+**Concurrency, swept against the provider rather than guessed.** The same 468 requests:
+
+| Concurrency |  Elapsed | Input tokens/s | Throttled |
+| ----------: | -------: | -------------: | --------: |
+|          16 | 7,167 ms |           157k |         0 |
+|          24 | 5,083 ms |           222k |         0 |
+|          32 | 3,655 ms |           308k |         0 |
+
+24 is the last step inside the provider's published 250,000 tokens a second. 32 was faster and
+nothing refused it, but the documentation says the limits adjust without notice, and a declared
+capacity should not rest on exceeding a published number. `maxConcurrentRequests` is 24.
+
+**That still leaves five seconds, and the first answers arrive in under one.** So `/api/search`
+streams: a progress line as each batch lands, one final line at the end. Measured through the
+running application on the same document:
+
+|                         |   Before |          After |
+| ----------------------- | -------: | -------------: |
+| First passage on screen | 7,167 ms | **338–664 ms** |
+| Search complete         | 7,167 ms | 5,196–5,459 ms |
+
+**What a provisional list may and may not say.** It carries no status. Measured on this fixture,
+the top three kept changing until round 26 of 30 — 87% of the units judged — so a verdict announced
+early would often be wrong. That fixture is the worst case, since every passage is nearly the same
+sentence, but the panel is built for the worst case: it says how many passages have been judged and
+that the order may still change, and shows a verdict only when the final line arrives.
+
+**Not covered by an automated test:** the provisional rendering itself. Playwright cannot fulfil a
+route with a stream, so `tests/search-client.test.ts` covers the client's parsing of a chunked body
+and `tests/call-jev.test.ts` covers the Worker's progress callback, while the two ends meeting is
+verified by the measurement above.

@@ -5,7 +5,7 @@
  * TypeSafe credentials never leave this Worker, and no log line carries a filename, a query, or
  * any extracted text (spec §10).
  */
-import type { SearchErrorCode, SearchErrorResponse, SearchResponse } from "@/lib/types";
+import type { SearchErrorCode, SearchErrorResponse, SearchStreamMessage } from "@/lib/types";
 import { LIMITS } from "@/lib/types";
 import { buildJevRequest, packBatches } from "./search/build-jev-request";
 import { callJevBatches } from "./search/call-jev";
@@ -57,7 +57,17 @@ const errorResponse = (code: SearchErrorCode): Response => {
     return Response.json(body, { status: STATUS_CODES[code] ?? 400 });
 };
 
-const jsonHeaders = { "Content-Type": "application/json" };
+/**
+ * Newline-delimited JSON, so the reader is shown passages while the rest are still being judged.
+ *
+ * `no-transform` because a proxy that buffered the body would undo the entire point, and
+ * `no-store` because none of this may be cached (spec §10).
+ */
+const streamHeaders = {
+    "Content-Type": "application/x-ndjson; charset=utf-8",
+    "Cache-Control": "no-store, no-transform",
+    "X-Accel-Buffering": "no",
+};
 
 const sleep = (milliseconds: number, signal?: AbortSignal): Promise<void> =>
     new Promise((resolve, reject) => {
@@ -101,68 +111,116 @@ const handleSearch = async (request: Request, env: WorkerEnv): Promise<Response>
     const model = env.TYPESAFE_MODEL ?? "jev-1.13.0";
     const batches = packBatches(segments).map((batch) => buildJevRequest(model, query, batch));
 
-    const outcome = await callJevBatches(batches, {
-        // Bound deliberately: passing `globalThis.fetch` bare detaches it from its receiver and
-        // the Workers runtime rejects the call with "Illegal invocation" before anything is sent.
-        // A unit test cannot catch this, because an injected test double has no such requirement.
-        fetch: globalThis.fetch.bind(globalThis),
-        now: Date.now,
-        sleep,
-        apiKey: env.TYPESAFE_API_KEY,
-        model,
-        // One deadline for the whole search, not one per request.
-        deadlineAt: startedAt + LIMITS.searchDeadlineMs,
-        signal: request.signal,
-    });
+    const stream = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = stream.writable.getWriter();
+    const encoder = new TextEncoder();
+    let writable = true;
 
-    if (!outcome.ok) {
-        console.error(
-            JSON.stringify({
-                event: "search_failed",
-                code: outcome.code,
-                segmentCount: segments.length,
-                batchCount: batches.length,
-                model,
-                elapsedMs: Date.now() - startedAt,
-            }),
-        );
-        return errorResponse(outcome.code);
-    }
-
-    const ranked = rankResults(segments, outcome.answers);
-    if (!ranked.ok) {
-        console.error(JSON.stringify({ event: "search_failed", code: ranked.code, model }));
-        return errorResponse(ranked.code);
-    }
-
-    const elapsedMs = Date.now() - startedAt;
-
-    console.log(
-        JSON.stringify({
-            event: "search_completed",
-            status: ranked.status,
-            segmentCount: segments.length,
-            batchCount: batches.length,
-            resultCount: ranked.results.length,
-            model: outcome.model,
-            inputTokens: outcome.usage.inputTokens,
-            outputTokens: outcome.usage.outputTokens,
-            elapsedMs,
-        }),
-    );
-
-    const body: SearchResponse = {
-        documentId,
-        requestId,
-        status: ranked.status,
-        results: ranked.results,
-        evaluations: ranked.evaluations,
-        evaluatedSegmentCount: ranked.evaluatedSegmentCount,
-        model: outcome.model,
-        elapsedMs,
+    const emit = (message: SearchStreamMessage): void => {
+        if (!writable) return;
+        // A reader that navigated away closes the stream; that is ordinary, not an error, and the
+        // search still has to finish tidily rather than throw out of the batch loop.
+        writer.write(encoder.encode(`${JSON.stringify(message)}\n`)).catch(() => {
+            writable = false;
+        });
     };
 
-    return new Response(JSON.stringify(body), { headers: jsonHeaders });
+    const run = async (): Promise<void> => {
+        const outcome = await callJevBatches(batches, {
+            // Bound deliberately: passing `globalThis.fetch` bare detaches it from its receiver
+            // and the Workers runtime rejects the call with "Illegal invocation" before anything
+            // is sent. A unit test cannot catch this, because an injected test double has no such
+            // requirement.
+            fetch: globalThis.fetch.bind(globalThis),
+            now: Date.now,
+            sleep,
+            apiKey: env.TYPESAFE_API_KEY,
+            model,
+            // One deadline for the whole search, not one per request.
+            deadlineAt: startedAt + LIMITS.searchDeadlineMs,
+            signal: request.signal,
+            onProgress: ({ evaluated, total, answers }) => {
+                // Ranked over what is known so far. No status: §7 classifies over every segment.
+                const provisional = rankResults(
+                    segments.filter((segment) => answers.has(segment.id)),
+                    answers,
+                );
+                emit({
+                    type: "progress",
+                    documentId,
+                    requestId,
+                    evaluated,
+                    total,
+                    results: provisional.ok ? provisional.results : [],
+                });
+            },
+        });
+
+        if (!outcome.ok) {
+            console.error(
+                JSON.stringify({
+                    event: "search_failed",
+                    code: outcome.code,
+                    segmentCount: segments.length,
+                    batchCount: batches.length,
+                    model,
+                    elapsedMs: Date.now() - startedAt,
+                }),
+            );
+            emit({ type: "error", error: { code: outcome.code, message: ERROR_MESSAGES[outcome.code] } });
+            return;
+        }
+
+        const ranked = rankResults(segments, outcome.answers);
+        if (!ranked.ok) {
+            console.error(JSON.stringify({ event: "search_failed", code: ranked.code, model }));
+            emit({ type: "error", error: { code: ranked.code, message: ERROR_MESSAGES[ranked.code] } });
+            return;
+        }
+
+        const elapsedMs = Date.now() - startedAt;
+
+        console.log(
+            JSON.stringify({
+                event: "search_completed",
+                status: ranked.status,
+                segmentCount: segments.length,
+                batchCount: batches.length,
+                resultCount: ranked.results.length,
+                model: outcome.model,
+                inputTokens: outcome.usage.inputTokens,
+                outputTokens: outcome.usage.outputTokens,
+                elapsedMs,
+            }),
+        );
+
+        emit({
+            type: "final",
+            documentId,
+            requestId,
+            status: ranked.status,
+            results: ranked.results,
+            evaluations: ranked.evaluations,
+            evaluatedSegmentCount: ranked.evaluatedSegmentCount,
+            requestCount: batches.length,
+            model: outcome.model,
+            elapsedMs,
+        });
+    };
+
+    /*
+     * The stream is returned immediately and filled as the batches land. An error after the
+     * headers have gone cannot become a status code, so it travels as a final `error` line and the
+     * client treats it exactly as it treats a non-2xx body — a failed search, never a no-match.
+     */
+    void run()
+        .catch((error: unknown) => {
+            console.error(JSON.stringify({ event: "search_failed", code: "internal_error", name: (error as Error | undefined)?.name ?? "Error" }));
+            emit({ type: "error", error: { code: "internal_error", message: ERROR_MESSAGES.internal_error } });
+        })
+        .finally(() => void writer.close().catch(() => undefined));
+
+    return new Response(stream.readable, { headers: streamHeaders });
 };
 
 export default {

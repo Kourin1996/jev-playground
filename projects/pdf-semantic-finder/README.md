@@ -30,11 +30,19 @@ their prose were split line by line, so every answer arrived cut mid-sentence. E
 mechanism reaches the intended passage; not enough to calibrate the thresholds in `docs/spec.md`
 §7, which remain hypotheses.
 
-**Timing near the limits.** A 48-page document of 672 segments and 168 requests completed in
-2.8–3.1 s against a 15-second deadline, over three runs. At the 300% zoom maximum it holds 827 MB
-of canvas — measured, still usable, and the number that would decide any further page increase.
+**Timing near the limits.** A 48-page document of 1,872 segments — 94% of the cap — and 468
+requests completed in 5.2–5.5 s against a 15-second deadline, with the first passages on screen in
+338–664 ms because the response is streamed. At the 300% zoom maximum it holds 827 MB of canvas —
+measured, still usable, and the number that would decide any further page increase.
 
-**Not yet verified:** whether §7's thresholds sit in the right place, behaviour at the 1,000-segment
+**Shown, not hidden.** Each meaning result now carries the model's own judgement of the passage —
+the probability it assigned to the highest relevance level and its certainty in that — under a
+persistent **Model judgment** line explaining what the numbers are. Hiding them was worse than
+showing them: §14.19 found the same passage crossing all three of §7's bands depending on which
+other passages shared its request, so a reader who cannot see the number cannot tell a passage the
+model was sure of from one that scraped in at 0.36. It is never presented as a match percentage.
+
+**Not yet verified:** whether §7's thresholds sit in the right place, behaviour at the 2,000-segment
 cap itself, what a rate-limited retry costs inside the deadline, and whether a PDF's own text can
 steer a judgement.
 
@@ -49,7 +57,7 @@ remain in `docs/spec.md`; English is the canonical language.
 - PDF.js rendering, extraction, and source-position mapping
 - Local exact-text search
 - Meaning search through a Cloudflare Worker and TypeSafe AI Jev
-- One text-based PDF of up to 10 MB, 50 pages and 100,000 extracted characters
+- One text-based PDF of up to 10 MB, 50 pages and 200,000 extracted characters
 - Up to three original-passage results with page navigation and highlighting
 - No OCR, generated answers, database, or persistent document storage
 

@@ -26,6 +26,16 @@ export type CallJevDependencies = {
     /** Absolute time by which the whole search must be finished (spec §6.4). */
     deadlineAt: number;
     signal?: AbortSignal;
+    /**
+     * Called as each batch lands, with every answer seen so far.
+     *
+     * The whole search is `requests.length` round-trips deep and each one costs about 240 ms, so
+     * at the segment cap the reader waits five seconds to be shown anything at all — while the
+     * first answers arrive in under half a second. This is how they reach the reader before the
+     * last batch does. It reports progress, never a verdict: §7 classifies over every segment, and
+     * a `no_match` announced halfway through would be a statement the search has not earned.
+     */
+    onProgress?: (progress: { evaluated: number; total: number; answers: ReadonlyMap<string, JevScoreAnswer> }) => void;
 };
 
 /**
@@ -176,6 +186,8 @@ export const callJevBatch = async (request: JevRequestBody, dependencies: CallJe
  * an unevaluated document as though it had simply produced no match.
  */
 export const callJevBatches = async (requests: readonly JevRequestBody[], dependencies: CallJevDependencies): Promise<BatchOutcome> => {
+    // One question per segment, so the questions across every batch are the segments to evaluate.
+    const totalSegments = requests.reduce((total, request) => total + Object.keys(request.questions).length, 0);
     const answers = new Map<string, JevScoreAnswer>();
     const usage: JevUsage = { inputTokens: 0, outputTokens: 0 };
     let model = dependencies.model;
@@ -198,6 +210,8 @@ export const callJevBatches = async (requests: readonly JevRequestBody[], depend
             }
 
             for (const [segmentId, answer] of outcome.answers) answers.set(segmentId, answer);
+            dependencies.onProgress?.({ evaluated: answers.size, total: totalSegments, answers });
+
             usage.inputTokens += outcome.usage.inputTokens;
             usage.outputTokens += outcome.usage.outputTokens;
             model = outcome.model;

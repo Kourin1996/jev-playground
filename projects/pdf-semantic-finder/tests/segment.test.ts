@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { buildSegments, formatSegmentId, normalizeForSearch, normalizeWithOffsets } from "@/lib/pdf/build-segments";
-import { groupItemsIntoLines, looksMultiColumn, needsSeparatingSpace } from "@/lib/pdf/extract-text";
+import { groupItemsIntoLines, looksMultiColumn, needsSeparatingSpace, orderByColumn } from "@/lib/pdf/extract-text";
 import { LIMITS, countCharacters } from "@/lib/types";
 import type { TextItemLike } from "@/lib/types";
 import { block, line, splitLine } from "./fixtures/text-items";
@@ -163,6 +163,62 @@ describe("normalizeForSearch", () => {
 
     it("strips zero-width characters", () => {
         expect(normalizeForSearch("返​金")).toBe("返金");
+    });
+});
+
+describe("orderByColumn", () => {
+    /** Two columns of `rows` lines each, left at x=72 and right at x=320. */
+    const twoColumns = (rows: number) => {
+        const items: TextItemLike[] = [];
+        for (let row = 0; row < rows; row += 1) {
+            for (const [x, side] of [
+                [72, "左"],
+                [320, "右"],
+            ] as const) {
+                const text = `${side}第${row + 1}項 本項については別途協議する。`;
+                items.push({ str: text, transform: [10.5, 0, 0, 10.5, x, 700 - row * 16], width: [...text].length * 10, height: 10.5, hasEOL: true });
+            }
+        }
+        return items;
+    };
+
+    it("reads down one column and then down the next", () => {
+        // Baseline order reads across the gutter, which does not merely reorder the text: the left
+        // column's sentence is cut and the right column's is inserted into it.
+        const lines = groupItemsIntoLines(twoColumns(4));
+        expect(looksMultiColumn(lines)).toBe(true);
+
+        const ordered = orderByColumn(lines, 10.5).map((line) => line.text);
+        expect(ordered).toEqual([
+            "左第1項 本項については別途協議する。",
+            "左第2項 本項については別途協議する。",
+            "左第3項 本項については別途協議する。",
+            "左第4項 本項については別途協議する。",
+            "右第1項 本項については別途協議する。",
+            "右第2項 本項については別途協議する。",
+            "右第3項 本項については別途協議する。",
+            "右第4項 本項については別途協議する。",
+        ]);
+    });
+
+    it("keeps a segment's text inside one column", () => {
+        const pages = [toPage(twoColumns(6))];
+        const inOrder = buildSegments([{ pageNumber: 1, lines: orderByColumn(groupItemsIntoLines(twoColumns(6)), 10.5) }]);
+        expect(pages.length).toBe(1);
+
+        // Nothing built from a columned page may carry both sides: that is the corruption, not the
+        // ordering, and it is what makes every judgement about such a passage meaningless.
+        for (const segment of inOrder) {
+            const both = segment.originalText.includes("左第") && segment.originalText.includes("右第");
+            expect(both, `columns fused: ${segment.originalText.slice(0, 60)}`).toBe(false);
+        }
+    });
+
+    it("leaves a single-column page in baseline order", () => {
+        const lines = groupItemsIntoLines(
+            block(700, ["第1条（目的）本契約の目的を定める。", "第2条（定義）用語の意味を定める。", "第3条（料金）対価を定める。"]),
+        );
+        expect(orderByColumn(lines, 10.5).map((line) => line.text)).toEqual(lines.map((line) => line.text));
     });
 });
 

@@ -440,11 +440,17 @@ Characters no longer force a smaller batch. `maxCharactersPerBatch` is derived �
 9,600`, and the limit is 10,000 — so the count is what binds and every state really is the same
 size. The old 6,000 was below `8 × 800`, which is why packing used to put characters first.
 
-At most sixteen requests run concurrently, under a single 15-second deadline for the whole search.
-At the 1,000-segment cap that is `ceil(1,000 / 4) = 250` requests and so 16 rounds, leaving about
-940 ms per round-trip. A real search of the 86-unit whitepaper took 22 requests in 1,055 ms — 3
-rounds, so about 350 ms each. A 672-unit document of 48 pages, near both limits, took 168 requests
-and 2.8–3.1 s.
+At most twenty-four requests run concurrently, under a single 15-second deadline for the whole
+search. The number came from a sweep against the provider rather than from arithmetic: the same 468
+requests took 7,167 ms at 16, 5,083 ms at 24 and 3,655 ms at 32, and 24 is the last step inside the
+published 250,000 tokens a second.
+
+**The response is streamed.** A 48-page document is 468 round-trips deep at a median of 236 ms
+each, so the reader used to wait 7.2 seconds to be shown anything. `/api/search` now answers with
+newline-delimited JSON — a progress line as each batch lands, one final line at the end — and the
+first passages reach the screen in **338–664 ms**. A progress line carries no status: §7 classifies
+over every segment, and on a document of near-identical passages the top three kept changing until
+87% of them were judged. See `docs/spec.md` §14.21.
 
 **It does not make the scale one thing, and an earlier version of this document claimed it did.**
 Holding the count at four and varying only what else differs between requests, the §7 verdict for
@@ -653,8 +659,37 @@ out which segments they are without anything extra travelling to the Worker and 
 makes it the selected result — nothing is re-evaluated and the rest of the list stays as the search
 left it.
 
-The panel calls this **"Context sent with this passage"**, never "what Jev used". The response does
-not report which context influenced an answer, and saying otherwise would be inventing evidence.
+The control that opens them reads **"Show surrounding text"**, and what it reveals is described as
+what was _sent_ with the passage — never as "what Jev used". The response does not report which
+context influenced an answer, and saying otherwise would be inventing evidence.
+
+## 7.5 What the result panel shows, and why the numbers are on it now
+
+Each result carries its physical page number and the original extracted text. A meaning result also
+carries the two numbers the provider returned for that passage:
+
+```text
+95%  confident · certainty 0.80
+ │        │                 └── how sure the model was of that distribution
+ │        └── the band the probability falls in, per the §7 thresholds
+ └── the probability the model gave to the highest relevance level
+```
+
+These used to be hidden. The reason for showing them is §14.19: the same passage crossed all three
+§7 bands depending on which other passages shared its request. Without the number, a passage that
+scraped in at 0.36 looks exactly like one the model was certain of — and 0.36 is precisely where the
+verdict is least stable.
+
+So the list carries a permanent **Model judgment** line saying what the numbers are and that they
+are not a measured match. In text, on screen, not in a hover tooltip: a reader on a touch screen or
+a keyboard never sees a tooltip, and what they would be left with is a percentage that looks like a
+measurement. The numbers are still never labelled "98% match" — that would claim a similarity
+measurement this system does not make.
+
+Terms of the query that appear literally in a passage are emphasised in the preview. Only literal
+occurrences: the response does not say which words it read, so inferring which ones mattered would
+be another invented explanation. A Japanese query carries no word boundaries and is matched whole;
+a paraphrase match therefore shows no emphasis at all, which is the honest outcome.
 
 ## 8. Position mapping: finding the passage on the page
 
@@ -757,6 +792,11 @@ no error of any kind.
 Calling `textLayer.update()` is required, not optional. Changing only the CSS variable leaves each
 element's horizontal stretch correction stale, which shows as visible drift on Japanese text at
 125%.
+
+Once the characters are marked, the viewer scrolls the **passage** into the middle of the pane, not
+the top of its page. A page is taller than the pane at any readable zoom, so scrolling to the page
+left a clause near its foot off-screen or clipped by the bottom edge — the reader had to hunt for
+the highlight the search had just found for them.
 
 ## 9. Staleness and failure
 
