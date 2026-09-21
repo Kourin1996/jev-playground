@@ -341,6 +341,10 @@ The endpoint is public and unauthenticated, so it is admitted before it is read:
 | Declared and actual body size               | `413 request_body_too_large`                | While the body is arriving                 |
 | Provider capacity, sized from the batches   | `503 capacity_exhausted` with `Retry-After` | After validation, before any provider call |
 
+The per-client limit is keyed on the connecting address the platform supplies, and is skipped where
+there is none — bucketing unidentified callers together would let one of them exhaust the allowance
+for all of them. The account-wide budget has no such dependency.
+
 The media type is compared exactly rather than by substring: `text/plain` is a CORS-safelisted request content type, so a substring test would let any page post here from a visitor's browser with no preflight. No `Access-Control-Allow-Origin` is ever sent, and every `/api/` response carries `Cache-Control: no-store`.
 
 The client shows the refusal and does not retry automatically. A retry on `429` or `503` is the amplification the limits exist to prevent.
@@ -472,14 +476,28 @@ positive costs them the time to read a passage and reject it:
 | Miss           | The answer is in the searchable text and the search returned nothing |
 | Top-3 hit      | The intended passage is among the results shown                      |
 | False positive | No answer exists and the search reported `matched`                   |
+| Provider error | No relevance outcome was produced at all                             |
 
-**Measured.** `npm run eval`, 32 queries over two documents, one run:
+A provider failure is counted and named separately, never folded into a miss: blaming the ranking
+for an outage would make the quality numbers move with the provider's availability.
+
+**What a measured search is.** The harness takes the verdict from the terminal line of the response
+and reads the passages only once the interface has committed it. Neither was true before: it
+selected its mode with a control the interface no longer had, so it could not run at all; and it
+resolved as soon as any result appeared, which under streaming is a ranking the panel is still
+labelling as provisional. It also inferred `uncertain` from a sentence the panel suppresses while a
+search is running, so an early read scored an uncertain result as a match and tallied a false
+positive against it.
+
+**Measured** — against the harness described above, 32 queries over two documents, one run, through
+the real provider on 2026-09-21:
 
 | Rate           |  Result |
 | -------------- | ------: |
 | Miss           |  0 / 26 |
 | Top-3 hit      | 26 / 26 |
 | False positive |   0 / 6 |
+| Provider error |  0 / 32 |
 
 By category: paraphrase 15/15, denial 5/5, condition 6/6, no-answer 6/6.
 

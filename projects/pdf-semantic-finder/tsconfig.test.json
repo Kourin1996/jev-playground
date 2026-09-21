@@ -10,6 +10,8 @@
         "isolatedModules": true,
         "moduleDetection": "force",
         "noEmit": true,
+        // `npm run eval` runs under Node's type stripping, which needs the explicit `.ts` extension.
+        "allowImportingTsExtensions": true,
         "strict": true,
         "noUnusedLocals": true,
         "noUnusedParameters": true,

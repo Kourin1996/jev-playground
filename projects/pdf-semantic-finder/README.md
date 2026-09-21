@@ -21,14 +21,21 @@ holding the count at four and changing only the neighbours' length, their distan
 position still moved the verdict in 10 of 30 conditions. See `docs/spec.md` §14.19 for every
 condition and number.
 
-**Search quality, measured.** `npm run eval`, 32 queries over two documents, one run: 0 misses out
-of 26 answerable queries, 26 of 26 with the intended passage in the top three, 0 false positives
-out of 6. One document is a fictional Japanese fixture written so that nothing was tuned against
-it; the other is the Bitcoin whitepaper with eighteen queries written by an outside reviewer. Those
-outside queries found a segmentation defect on their first run — two pages whose figures outnumber
-their prose were split line by line, so every answer arrived cut mid-sentence. Enough to say the
-mechanism reaches the intended passage; not enough to calibrate the thresholds in `docs/spec.md`
-§7, which remain hypotheses.
+**Search quality, measured.** `npm run eval`, 32 queries over two documents, one run against the
+real provider: 0 misses out of 26 answerable queries, 26 of 26 with the intended passage in the top
+three, 0 false positives out of 6, and 0 provider errors. One document is a fictional Japanese
+fixture written so that nothing was tuned against it; the other is the Bitcoin whitepaper with
+eighteen queries written by an outside reviewer. Those outside queries found a segmentation defect
+on their first run — two pages whose figures outnumber their prose were split line by line, so every
+answer arrived cut mid-sentence.
+
+The harness itself had to be repaired before this number meant anything. It selected its search mode
+with a control the interface no longer had, so it could not run at all; and it scored whatever list
+was on screen when the first result appeared, which under streaming is a ranking the panel is still
+labelling as provisional. It now waits for a committed verdict.
+
+Enough to say the mechanism reaches the intended passage; not enough to calibrate the thresholds in
+`docs/spec.md` §7, which remain hypotheses.
 
 **Timing near the limits.** A 48-page document of 1,872 segments — 94% of the cap — and 468
 requests completed in 5.2–5.5 s against a 15-second deadline, with the first passages on screen in
@@ -107,16 +114,21 @@ Two bindings must exist before the app is public. Without them `/api/search` is 
 to the provider account:
 
 - `SEARCH_RATE_LIMIT`, a rate-limit binding, refuses a flood from one client before the request
-  body is read. It is evaluated per Cloudflare location, so it bounds one client rather than the
-  account.
+  body is read — 20 searches a minute, set from what a reader plausibly does rather than from what
+  the provider can carry. It is evaluated per Cloudflare location, so it bounds one client rather
+  than the account.
 - `SEARCH_BUDGET`, a Durable Object, holds the account-wide provider budget. It is the gate that
   matters: a search at the cap runs at about 222,000 provider tokens a second against a published
   250,000, so a second concurrent one is already over. It holds counters and expiring reservations
   only — never a query, a passage, or a document identifier.
 
-Both are typed optional, so a missing binding logs `admission_unavailable` and continues rather
-than breaking local development. **That also means a misconfigured deployment silently has no
-limiter**, so confirm after deploying that a refusal actually happens.
+Both are typed optional, so a missing binding logs `admission_unavailable` and continues rather than
+breaking local development. The rate limit is also skipped when `CF-Connecting-IP` is absent, which
+is the case locally — Cloudflare sets that header at the edge and overwrites anything the client
+sent, so it is always present in production and cannot be suppressed to escape the limit.
+
+**Both accommodations mean a misconfigured deployment silently has no per-client limiter**, so
+confirm after deploying that a refusal actually happens, with its `Retry-After`.
 
 Publish `dist/client`, never `dist/` — `dist/pdf_finder` holds the built Worker and, locally, a
 copy of `.dev.vars`.
@@ -150,10 +162,14 @@ browser. `npm run verify` runs the automated part. A Japanese translation is at
 
 ### Fixture PDFs
 
-`npm run fixtures:sample` generates a development sample so the viewer can be exercised
-immediately. It is **not** an acceptance fixture: the three fictional Japanese PDFs that
-`docs/spec.md` §11.1 requires, and the 20-query evaluation set authored against them, are still
-outstanding. See `tests/fixtures/README.md`. `npm run eval` refuses to run until they exist.
+`npm run fixtures:sample` generates every development and limit-case PDF the suites need. They are
+gitignored, so generate them once after installing; each suite skips with a named message while a
+file it needs is absent, rather than reporting success for a test it did not run.
+
+The §11.1 evaluation set is `tests/evaluation-cases.json`: 32 queries over two documents —
+`eval-terms-ja.pdf`, a fictional Japanese terms-of-service document deliberately not used to tune
+anything, and `bitcoin.pdf`, with eighteen queries written by an outside reviewer. Both are
+present. See `tests/fixtures/README.md` for what each file is for.
 
 ## How it works
 

@@ -104,6 +104,9 @@ const streamHeaders = {
     "X-Accel-Buffering": "no",
 };
 
+/** The window declared in `wrangler.jsonc`, so `Retry-After` states the real interval. */
+const RATE_LIMIT_PERIOD_SECONDS = 60;
+
 const sleep = (milliseconds: number, signal?: AbortSignal): Promise<void> =>
     new Promise((resolve, reject) => {
         const timer = setTimeout(resolve, milliseconds);
@@ -125,12 +128,23 @@ const handleSearch = async (request: Request, env: WorkerEnv): Promise<Response>
     // this Worker buffer four megabytes, however many times they ask.
     if (!isSameOriginRequest(request.headers, request.url)) return errorResponse("invalid_request");
 
-    if (rateLimit === undefined) {
-        console.warn(JSON.stringify({ event: "admission_unavailable", gate: "rate_limit" }));
+    /*
+     * Keyed on the connecting client, and skipped when there is no such thing.
+     *
+     * Cloudflare sets `CF-Connecting-IP` at the edge and overwrites anything a client sent, so in
+     * production it is always present and cannot be suppressed to escape the limit. It is absent in
+     * local development — and bucketing every local caller under one constant key would mean an
+     * unrelated process could exhaust the allowance and make this endpoint refuse a test run, which
+     * is what it did before this comment existed.
+     *
+     * The provider budget below has no such dependency and still applies.
+     */
+    const client = request.headers.get("CF-Connecting-IP");
+    if (rateLimit === undefined || client === null) {
+        console.warn(JSON.stringify({ event: "admission_unavailable", gate: "rate_limit", reason: rateLimit === undefined ? "no_binding" : "no_client_ip" }));
     } else {
-        const key = request.headers.get("CF-Connecting-IP") ?? "unknown";
-        const { success } = await rateLimit.limit({ key });
-        if (!success) return errorResponse("rate_limited", { "Retry-After": "60" });
+        const { success } = await rateLimit.limit({ key: client });
+        if (!success) return errorResponse("rate_limited", { "Retry-After": String(RATE_LIMIT_PERIOD_SECONDS) });
     }
 
     const body = await readBoundedJson(request, { signal: request.signal });
