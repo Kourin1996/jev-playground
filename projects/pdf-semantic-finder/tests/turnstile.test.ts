@@ -7,6 +7,7 @@
  * rejection. Reading a malformed body as a failed challenge would turn an outage at Cloudflare
  * into a product that refuses everyone.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { SITEVERIFY_URL, parseSiteverifyResult, verifyChallengeToken } from "../worker/admission/turnstile";
 
@@ -93,5 +94,33 @@ describe("verifyChallengeToken", () => {
 
     it("treats an undocumented body as unavailable, never as a rejection", async () => {
         await expect(verifyChallengeToken("tok", "secret", { fetchImpl: answering({ ok: "yes" }) })).resolves.toEqual({ ok: false, reason: "unavailable" });
+    });
+});
+
+describe("the deployment declares the widget", () => {
+    /*
+     * A regression pin for a failure that reached production.
+     *
+     * The sitekey was set as a plain-text variable in the Cloudflare dashboard, which looked
+     * correct and then disappeared on the next `wrangler deploy` — that file is the source of
+     * truth for `vars`, and what is not in it is not deployed. Secrets are stored separately and
+     * survived, so the Worker kept demanding a token while `/api/config` answered `null` and the
+     * client had none to send. Every search came back `challenge_failed`.
+     *
+     * Reading the file rather than the parsed config on purpose: what matters is that the value is
+     * committed, which is the property that was missing.
+     */
+    const config = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+    const declared = /"VITE_TURNSTILE_SITEKEY"\s*:\s*"([^"]*)"/u.exec(config)?.[1];
+
+    it("commits the sitekey, because a dashboard variable does not survive a deploy", () => {
+        expect(declared, "wrangler.jsonc declares no VITE_TURNSTILE_SITEKEY").toBeDefined();
+        expect(declared).not.toBe("");
+    });
+
+    it("is not one of Cloudflare's test keys, which would ship a widget that always passes", () => {
+        // `1x…`, `2x…` and `3x…` are the documented dummy sitekeys. They belong in `.dev.vars`,
+        // never in the deployed configuration, where they would make the gate decorative.
+        expect(declared?.slice(0, 2), `test sitekey in wrangler.jsonc: ${declared}`).not.toMatch(/^[123]x$/u);
     });
 });

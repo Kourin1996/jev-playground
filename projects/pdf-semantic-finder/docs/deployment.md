@@ -66,9 +66,12 @@ npx wrangler secret put TYPESAFE_MODEL     # only if pinning something other tha
 npx wrangler secret put TURNSTILE_SECRET   # the human-presence gate (spec §9.3)
 ```
 
-`VITE_TURNSTILE_SITEKEY` is the public half and goes in the deployment's **variables**, not its
-secrets. The Worker hands it to the browser at `/api/config`; Vite never sees it, so changing the
-widget needs no rebuild. With no secret set the gate fails open and logs `admission_unavailable` —
+`VITE_TURNSTILE_SITEKEY` is the public half and is committed in `wrangler.jsonc` under `vars`. Do
+**not** set it in the dashboard instead: that file is the source of truth for `vars`, so a variable
+set there is gone at the next `wrangler deploy`. That happened — the deploy succeeded, secrets
+survived because they are stored separately, `/api/config` began answering `null`, and every search
+was refused with `challenge_failed`. A sitekey is public by design, so there is nothing lost by
+committing it. The Worker hands it to the browser at `/api/config`; Vite never sees it. With no secret set the gate fails open and logs `admission_unavailable` —
 the same hazard as a missing rate-limit binding, and checked the same way in §5.2.
 
 `.dev.vars` is for local development and is gitignored. It is **not** uploaded: `wrangler deploy`

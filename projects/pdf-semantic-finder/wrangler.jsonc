@@ -22,6 +22,22 @@
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
     },
+    /*
+     * Turnstile's public half, which `/api/config` hands to the browser (spec §9.3).
+     *
+     * Committed rather than set in the dashboard, and committed rather than kept secret. A sitekey
+     * is public by design — it appears in the page for anyone to read — so there is nothing here to
+     * protect. What there is to protect is the deployment: a plain-text variable set in the
+     * dashboard is **not** carried over by `wrangler deploy`, which takes this file as the source
+     * of truth for `vars`. Setting it there once looked like it worked and then vanished on the
+     * next deploy, leaving `/api/config` answering `null`, the client sending no token, and the
+     * Worker refusing every search with `challenge_failed`. Secrets are not affected — those are
+     * stored separately and survived.
+     *
+     * The secret half stays a secret: `npx wrangler secret put TURNSTILE_SECRET`.
+     */
+    "vars": { "VITE_TURNSTILE_SITEKEY": "0x4AAAAAAE--04AJZVcmRLCd" },
+
     // Per-client admission, checked before the request body is read (spec §9.3). Per-colo rather
     // than global: it bounds one client, not the provider account. SEARCH_BUDGET does that.
     //

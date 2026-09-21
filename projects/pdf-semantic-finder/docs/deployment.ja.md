@@ -65,8 +65,12 @@ npx wrangler secret put TYPESAFE_MODEL     # 既定以外のモデルを固定�
 npx wrangler secret put TURNSTILE_SECRET   # 人間性チェック(仕様書 §9.3)
 ```
 
-`VITE_TURNSTILE_SITEKEY` は公開側の値なので、secret ではなくデプロイの**変数**に置きます。Worker が
-`/api/config` でブラウザに渡すため Vite は関与せず、ウィジェットの差し替えに再ビルドは不要です。
+`VITE_TURNSTILE_SITEKEY` は公開側の値で、`wrangler.jsonc` の `vars` にコミットしてあります。
+**dashboard 側で設定しないでください。** `vars` の正典はこのファイルなので、dashboard で設定した
+変数は次の `wrangler deploy` で消えます。実際に起きました — デプロイは成功し、secret は別管理なので
+残り、`/api/config` が `null` を返すようになって、すべての検索が `challenge_failed` で拒否されました。
+sitekey は公開前提の値なので、コミットして失うものはありません。Worker が `/api/config` でブラウザに
+渡すため Vite は関与しません。
 secret が未設定の場合、ゲートは fail open して `admission_unavailable` をログに出します — rate limit
 binding が欠けている場合と同じ危険であり、確認方法も §5.2 と同じです。
 
