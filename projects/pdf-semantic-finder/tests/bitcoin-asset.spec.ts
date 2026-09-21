@@ -256,8 +256,8 @@ test.describe("assets/bitcoin.pdf", () => {
         await expect(articles.nth(1)).toContainText("matched");
         // Far enough down the ramp to fall under both thresholds.
         await expect(articles.nth(80)).toContainText("below threshold");
-        // What travelled with the passage is shown too, not only the passage.
-        await expect(articles.nth(1).getByText("Context sent with this passage")).toBeVisible();
+        // The context each passage was sent with is no longer displayed; it still travels.
+        await expect(page.getByText("Context sent with this passage")).toHaveCount(0);
     });
 
     test("takes its results from a streamed response", async ({ page }) => {

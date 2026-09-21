@@ -838,6 +838,30 @@ test.describe("viewer", () => {
         expect(new Set(after).size).toBe(after.length);
     });
 
+    test("takes the reader from a passage in the extracted text to that passage on the page", async ({ page }) => {
+        // Reading a judgement and then having to find the passage by eye was the gap. The segment
+        // ID says where it is, but only to someone willing to count.
+        await openFixture(page);
+        await page.getByRole("button", { name: "View extracted text" }).click();
+
+        // A segment far enough down that no search returned it, so this cannot be a result click.
+        const card = page.locator("article").nth(8);
+        const segmentId = (await card.locator("header").innerText()).match(/p\d{3}-s\d{3}/u)![0];
+        const passage = (await card.locator("p").last().innerText()).slice(0, 16);
+
+        await card.getByRole("button", { name: `Show ${segmentId} in the document` }).click();
+
+        // The view closes, the passage is highlighted, and the viewer is on its page.
+        await expect(page.locator("article header")).toHaveCount(0);
+        await expect(page.locator(".pdf-finder-highlight").first()).toBeVisible();
+        const highlighted = (await page.locator(".pdf-finder-highlight").allInnerTexts()).join("").replace(/\s+/gu, "");
+        expect(highlighted).toContain(passage.replace(/\s+/gu, "").slice(0, 10));
+        await expect(page.getByText(`${Number(segmentId.slice(1, 4))} / 3`)).toBeVisible();
+
+        // And the result list still says what the search said, not what the debug view opened.
+        await expect(page.locator("ol li")).toHaveCount(0);
+    });
+
     test("offers a way out of the extracted text without scrolling back", async ({ page }) => {
         await openFixture(page);
         await page.getByRole("button", { name: "View extracted text" }).click();

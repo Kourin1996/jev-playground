@@ -5,10 +5,8 @@
  * how the document was divided, which can be checked against the rendered page. The judgement of
  * every evaluated segment — not just the three that were returned — says whether a passage was
  * passed over because Jev scored it low or because it was never a search unit to begin with.
- *
- * The context is shown alongside, because what was sent is not the passage alone.
  */
-import { ArrowLeft } from "@untitledui/icons";
+import { ArrowLeft, ArrowRight } from "@untitledui/icons";
 import { Badge } from "@/components/base/badges/badges";
 import { Button } from "@/components/base/buttons/button";
 import type { PdfSegment, SearchResultRecord } from "@/lib/types";
@@ -25,6 +23,8 @@ export type ExtractedTextViewProps = {
     evaluations: Map<string, SearchResultRecord> | null;
     /** Closes the view and returns to the document. */
     onClose: () => void;
+    /** Leaves the view and takes the reader to this passage on the page it sits on. */
+    onOpenSegment: (segmentId: string) => void;
 };
 
 /** The three levels Jev is asked to choose between (spec §6.3). */
@@ -98,7 +98,7 @@ const listOrder = (segments: readonly PdfSegment[], evaluations: Map<string, Sea
     return [...judged, ...rest];
 };
 
-export const ExtractedTextView = ({ segments, evaluations, onClose }: ExtractedTextViewProps) => (
+export const ExtractedTextView = ({ segments, evaluations, onClose, onOpenSegment }: ExtractedTextViewProps) => (
     <div className="flex flex-col gap-2 p-6">
         {/*
          * Sticky rather than at the top of the scroll: this view is hundreds of cards long, and a
@@ -137,26 +137,29 @@ export const ExtractedTextView = ({ segments, evaluations, onClose }: ExtractedT
                         <span className="text-xs text-quaternary">
                             {countCharacters(segment.originalText)} chars · {segment.itemIndexes.length} items
                         </span>
+
+                        {/*
+                         * The way back to the thing being described. Reading a judgement and then
+                         * having to find the passage by eye is the part of this view that was
+                         * missing — the segment ID says where it is, but only to someone willing
+                         * to count.
+                         */}
+                        <Button
+                            size="sm"
+                            color="tertiary"
+                            className="ml-auto"
+                            iconLeading={ArrowRight}
+                            aria-label={`Show ${segment.id} in the document`}
+                            onClick={() => onOpenSegment(segment.id)}
+                        >
+                            Show
+                        </Button>
                     </header>
 
                     {evaluation !== undefined && <Judgement evaluation={evaluation} />}
                     {evaluations !== null && evaluation === undefined && <p className="text-xs text-quaternary">Not evaluated in the last search.</p>}
 
                     <p className="text-sm whitespace-pre-wrap text-secondary">{segment.originalText}</p>
-
-                    {/*
-                     * What travelled with the passage. Dimmed, because it is not what a result
-                     * points at — it is only there so a 前項 or a pronoun resolves (spec §6.3).
-                     */}
-                    {(segment.contextBefore !== undefined || segment.contextAfter !== undefined) && (
-                        <details className="text-xs text-quaternary">
-                            <summary className="cursor-pointer select-none">Context sent with this passage</summary>
-                            <div className="mt-1.5 flex flex-col gap-1.5">
-                                {segment.contextBefore !== undefined && <p className="whitespace-pre-wrap">before: {segment.contextBefore}</p>}
-                                {segment.contextAfter !== undefined && <p className="whitespace-pre-wrap">after: {segment.contextAfter}</p>}
-                            </div>
-                        </details>
-                    )}
                 </article>
             );
         })}

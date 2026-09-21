@@ -109,6 +109,14 @@ export const PdfWorkspace = () => {
      */
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
     /**
+     * A passage the reader asked to see from the extracted-text view.
+     *
+     * Kept apart from `results` rather than appended to them: the debug view lists every segment,
+     * most of which no search returned, and pushing one into the result list would put a passage
+     * there that nothing found. The viewer shows it; the result list stays what the search said.
+     */
+    const [pinnedSegmentId, setPinnedSegmentId] = useState<string | null>(null);
+    /**
      * The query and mode that produced `results`, which are not always the ones in the search bar.
      *
      * Editing the query or switching mode does not clear the results — there is nothing wrong with
@@ -169,6 +177,7 @@ export const PdfWorkspace = () => {
         setStatus(null);
         setResults([]);
         setSelectedKey(null);
+        setPinnedSegmentId(null);
         hasChosenResultRef.current = false;
         setSubmitted(null);
         setSearchError(null);
@@ -287,6 +296,7 @@ export const PdfWorkspace = () => {
     const selectResult = useCallback((key: string) => {
         hasChosenResultRef.current = true;
         setSelectedKey(key);
+        setPinnedSegmentId(null);
         // On a narrow screen choosing a passage means "take me to it"; the pane control is the way
         // back. On a wide one both panes are already visible and nothing moves.
         setNarrowPane("document");
@@ -537,7 +547,52 @@ export const PdfWorkspace = () => {
         return "This passage could not be located in the rendered page, so it is not highlighted.";
     }, [highlightFailure]);
 
-    const highlightedHit = results.find((hit) => hit.key === selectedKey) ?? null;
+    /**
+     * Opens a passage from the extracted-text view: closes the view, and takes the viewer to it.
+     *
+     * A passage the search returned is selected as that result, so the list agrees with the page.
+     * Anything else is pinned instead, because it is not a result and the list should not claim it
+     * is.
+     */
+    const openSegmentInDocument = useCallback(
+        (segmentId: string) => {
+            setShowExtractedText(false);
+            setNarrowPane("document");
+
+            if (results.some((hit) => hit.key === segmentId)) {
+                selectResult(segmentId);
+                return;
+            }
+
+            hasChosenResultRef.current = true;
+            setSelectedKey(null);
+            setPinnedSegmentId(segmentId);
+        },
+        [results, selectResult],
+    );
+
+    /**
+     * What the viewer highlights: the selected result, or the passage pinned from the debug view.
+     *
+     * A result wins when there is one, so running a search supersedes a pinned passage rather than
+     * leaving the viewer on something the new search never mentioned.
+     */
+    const highlightedHit = useMemo((): SearchHit | null => {
+        const selected = results.find((hit) => hit.key === selectedKey);
+        if (selected !== undefined) return selected;
+        if (loaded === null || pinnedSegmentId === null) return null;
+
+        const segment = loaded.segments.find((candidate) => candidate.id === pinnedSegmentId);
+        if (segment === undefined) return null;
+
+        return {
+            key: segment.id,
+            pageNumber: segment.pageNumber,
+            ranges: segment.ranges,
+            previewText: segment.originalText,
+            segmentId: segment.id,
+        };
+    }, [results, selectedKey, loaded, pinnedSegmentId]);
 
     const pageSummary =
         loaded === null
@@ -774,6 +829,7 @@ export const PdfWorkspace = () => {
                                                 segments={loaded.segments}
                                                 evaluations={evaluations}
                                                 onClose={() => setShowExtractedText(false)}
+                                                onOpenSegment={openSegmentInDocument}
                                             />
                                         </div>
                                     )}

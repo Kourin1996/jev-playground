@@ -243,6 +243,10 @@ come first, highest first, and the rest follow in document order — the number 
 its position in the document, so reordering costs nothing. **Back to document** is pinned to the top
 right and must stay reachable after scrolling to the bottom of a long extraction.
 
+Each card has a **Show** control at the right of its top row: it should close the view, take the
+viewer to that passage highlighted on its own page, and leave the result list alone — a passage no
+search returned must not appear in it.
+
 Every segment now carries what Jev judged it to be — a
 percentage, a bar with both thresholds marked on it, the score and the confidence — including the
 segments no result names. 第4条 should read near 100% and `matched`; the unrelated clauses should
