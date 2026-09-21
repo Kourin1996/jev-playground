@@ -96,19 +96,21 @@ export const LIMITS = {
      */
     maxCharactersPerBatch: 10_000,
     /**
-     * Input tokens one provider request may carry.
+     * What one provider request may carry, as the provider publishes it: 64,000 tokens in total,
+     * of which **32,000** may be `state` plus the longest question.
      *
-     * Measured against the real provider, not published here: 123 dense Japanese passages
-     * succeeded at 47,943 input tokens and 124 returned
-     * `HTTP 400 {"error_type":"max_tokens_exceeded"}`. See docs/spec.md §14.28.
+     * The state limit is the binding one, and it is what a search actually runs into. Found by
+     * measurement before it was found in the documentation: 123 dense Japanese passages succeeded
+     * and 124 returned `HTTP 400 {"error_type":"max_tokens_exceeded"}`. See docs/spec.md §14.28.
      *
-     * Nothing enforces it at runtime, because `maxSegmentsPerBatch` of 4 sits two orders of
-     * magnitude inside it — a four-passage request measured 1,699 tokens. It is recorded, and
-     * asserted in `ranking.test.ts`, so that raising the batch size collides with a number here
-     * rather than with a 400 in the middle of a reader's search. A count that is safe for English
-     * prose is not safe for dense Japanese, so any future packing by count has to bound tokens too.
+     * Nothing enforces either at runtime, because `maxSegmentsPerBatch` of 4 sits far inside both —
+     * a four-passage request measured 1,699 input tokens. They are recorded, and asserted in
+     * `ranking.test.ts`, so that raising the batch size collides with a number here rather than
+     * with a 400 in the middle of a reader's search. A count that is safe for English prose is not
+     * safe for dense Japanese, so any future packing by count has to bound tokens too.
      */
-    maxInputTokensPerRequest: 48_000,
+    maxInputTokensPerRequest: 64_000,
+    maxStateTokensPerRequest: 32_000,
     /**
      * In-flight requests.
      *

@@ -133,6 +133,24 @@ confirm after deploying that a refusal actually happens, with its `Retry-After`.
 Publish `dist/client`, never `dist/` — `dist/pdf_finder` holds the built Worker and, locally, a
 copy of `.dev.vars`.
 
+### What it costs
+
+Measured, not estimated — see `docs/spec.md` §14.30 for the workings. Opening, rendering,
+extracting and exact-searching a PDF all happen in the browser and cost nothing; only a meaning
+search reaches either provider.
+
+| Searches a month (20-page documents) | TypeSafe | Cloudflare |   Total |
+| -----------------------------------: | -------: | ---------: | ------: |
+|                                  100 |    $0.38 |      $5.00 |   $5.38 |
+|                                1,000 |    $3.78 |      $5.00 |   $8.78 |
+|                               10,000 |   $37.80 |      $5.00 |  $42.80 |
+|                              100,000 |  $378.00 |      $5.00 | $383.00 |
+
+Cloudflare is effectively the $5 Workers Paid minimum until roughly 300,000 searches a month; a
+search is one inbound request and two Durable Object calls, and subrequests and static assets are
+not billed. TypeSafe is about $0.004 for a 20-page document and $0.05 at the 2,000-segment cap, and
+it passes the $5 minimum at about 1,300 searches a month.
+
 ### Credentials
 
 Credentials stay server side. Copy `.dev.vars.example` to `.dev.vars` for local development and

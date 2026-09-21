@@ -1470,3 +1470,59 @@ The top result was identical in every variant, and each shifted exactly one pass
 held-out set is the gate, and it has not been run on them. They are recorded as measured options,
 with the size of the prize attached, so the decision is about 24.5% of $0.0019 rather than about a
 guess.
+
+### 14.30 What it costs to run: Cloudflare and TypeSafe together
+
+Rates read from the providers' own pricing pages on 2026-09-21, and usage taken from the
+measurements in §14.20 and §14.28 rather than assumed.
+
+**Nothing but a meaning search costs anything.** Opening a PDF, rendering it, extracting its text,
+segmenting it and exact-searching it all happen in the browser and make no request to the Worker.
+The client bundle and the PDF.js assets are static: "Requests to static assets are free and
+unlimited." And "Cloudflare does not bill for subrequests you make from your Worker", so the 55
+calls a 217-segment search makes to TypeSafe are billed by TypeSafe alone.
+
+**Jev, measured.** Input tokens per segment, from three real searches:
+
+| Document                   | Segments | Input tokens | Per segment |
+| -------------------------- | -------: | -----------: | ----------: |
+| Japanese contract, 3 pp    |       13 |       10,542 |         811 |
+| `assets/bitcoin.pdf`, 9 pp |       86 |       45,462 |         529 |
+| Near-limit Japanese, 48 pp |    1,872 |    1,126,884 |         602 |
+
+At $42 per billion input tokens and free output, taking 600 tokens a segment:
+
+| Document         | Segments | Per search |
+| ---------------- | -------: | ---------: |
+| 3-page contract  |       13 |    $0.0003 |
+| 9-page paper     |       86 |    $0.0022 |
+| 20-page document |     ~150 |    $0.0038 |
+| 33-page document |      217 |    $0.0055 |
+| Segment cap      |    2,000 |    $0.0504 |
+
+**Cloudflare is a flat $5 until the volume is large.** Workers Paid is a "minimum charge of $5 USD
+per month for an account", including 10 million requests and 30 million CPU-milliseconds. A search
+is one inbound request, so requests are not the constraint; CPU is unmeasured but even at a
+generous 100 ms a search the included allowance covers 300,000 searches a month.
+
+The Durable Object takes two requests a search against 1 million included, so it covers 500,000
+searches. Its duration allowance cannot bind at all: 400,000 GB-s included against 128 MB, and an
+object alive every second of a 30-day month spends 324,000 GB-s. It holds no rows and no stored
+data, so the SQLite charges arriving in January 2026 do not apply to it either.
+
+**Together:**
+
+| Searches a month (20-page documents) | TypeSafe | Cloudflare |       Total |
+| -----------------------------------: | -------: | ---------: | ----------: |
+|                                  100 |    $0.38 |      $5.00 |   **$5.38** |
+|                                1,000 |    $3.78 |      $5.00 |   **$8.78** |
+|                               10,000 |   $37.80 |      $5.00 |  **$42.80** |
+|                              100,000 |  $378.00 |      $5.00 | **$383.00** |
+
+TypeSafe passes Cloudflare's $5 minimum at about **1,300 searches a month**. Below that the bill is
+the Workers subscription and almost nothing else; above it the bill is Jev tokens and almost nothing
+else. Cloudflare never becomes the larger half at any volume this product's limits allow.
+
+**What to watch, and it is not the money.** The single global Durable Object serialises every
+search through one instance. That is a latency bottleneck and a single point of failure long before
+it is a cost, and it is the first thing to revisit if traffic grows (§9.3).

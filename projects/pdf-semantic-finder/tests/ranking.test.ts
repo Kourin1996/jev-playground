@@ -303,9 +303,10 @@ describe("packBatches", () => {
 
     it("keeps a full batch inside the provider's per-request token ceiling", () => {
         /*
-         * The ceiling is a measured property of the provider (§14.28): 123 dense Japanese passages
-         * succeeded at 47,943 input tokens, 124 returned 400 `max_tokens_exceeded`. Exceeding it
-         * fails the whole search, not one passage, so the batch size has to stay inside it.
+         * The provider publishes 64,000 tokens a request, of which 32,000 may be state plus the
+         * longest question — and §14.28 found the same wall by measurement first: 123 dense
+         * Japanese passages succeeded, 124 returned 400 `max_tokens_exceeded`. Exceeding it fails
+         * the whole search, not one passage, so the batch size has to stay inside it.
          *
          * Checked against the worst case the validator admits — every passage at the per-segment
          * maximum with two neighbours of the same size — rather than against a typical document.
@@ -318,6 +319,11 @@ describe("packBatches", () => {
 
         const batch = packBatches(worstCase)[0];
         expect(estimateBatchInputTokens(batch)).toBeLessThan(LIMITS.maxInputTokensPerRequest);
+
+        // The state limit is the binding half and the one a search runs into first, so it is
+        // checked against the part of the estimate that is state rather than against the total.
+        const stateTokens = batch.state.reduce((total, entry) => total + Math.ceil(billedCharacters(entry) * 1.7), 0);
+        expect(stateTokens).toBeLessThan(LIMITS.maxStateTokensPerRequest);
     });
 
     it("sends the same total whatever the batch size, because a batch is not a cost lever", () => {
