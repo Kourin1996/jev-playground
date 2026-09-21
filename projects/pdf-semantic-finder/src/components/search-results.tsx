@@ -5,6 +5,7 @@
  * passage. Still no generated explanation: nothing here is written about the passage, only quoted
  * from it or reported as the number the provider returned.
  */
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight } from "@untitledui/icons";
 import { Badge } from "@/components/base/badges/badges";
 import { Button } from "@/components/base/buttons/button";
@@ -108,6 +109,17 @@ const judgementTone = (probability: number) =>
           ? { label: "unsure", className: "text-warning-primary" }
           : { label: "weak", className: "text-quaternary" };
 
+/**
+ * How many result cards are mounted at a time.
+ *
+ * Exact search returns every occurrence and spec §6.1 forbids capping that — but rendering every
+ * occurrence is a different promise. Measured on the 48-page fixture: a one-word query produced
+ * 3,744 results, and mounting all of them took a second to paint and left the search box taking
+ * **1.6 seconds to accept four typed characters**. The count stays exact and every result stays
+ * reachable; the list simply grows as the reader travels down it.
+ */
+const REVEAL_STEP = 50;
+
 /** "Page 3 could not be searched." / "Pages 3, 4 could not be searched." */
 const describePages = (pages: number[], plural: string, singular = plural): string =>
     pages.length === 1 ? `Page ${pages[0]} ${singular}.` : `Pages ${pages.join(", ")} ${plural}.`;
@@ -146,11 +158,35 @@ export const SearchResults = ({
     query,
     progress,
 }: SearchResultsProps) => {
-    if (!hasDocument) return null;
-
     // Derived here rather than passed in: position is a property of this rendering of the list, and
     // the list is re-ranked while a meaning search streams.
     const selectedIndex = results.findIndex((result) => result.key === selectedKey);
+
+    const [revealed, setRevealed] = useState(REVEAL_STEP);
+    const sentinelRef = useRef<HTMLLIElement>(null);
+
+    // A new result set starts short again.
+    useEffect(() => setRevealed(REVEAL_STEP), [results]);
+
+    // Whatever is selected must be mounted, however far down the list it is — Previous and Next
+    // move through the whole list, not through the part that happens to be rendered.
+    useEffect(() => {
+        if (selectedIndex >= 0) setRevealed((current) => Math.max(current, selectedIndex + REVEAL_STEP));
+    }, [selectedIndex]);
+
+    // Grows as the reader reaches the end of what is mounted.
+    useEffect(() => {
+        const sentinel = sentinelRef.current;
+        if (sentinel === null) return;
+
+        const observer = new IntersectionObserver((entries) => {
+            if (entries.some((entry) => entry.isIntersecting)) setRevealed((current) => current + REVEAL_STEP);
+        });
+        observer.observe(sentinel);
+        return () => observer.disconnect();
+    }, [revealed, results]);
+
+    if (!hasDocument) return null;
 
     if (errorMessage !== null) {
         return (
@@ -284,7 +320,7 @@ export const SearchResults = ({
             </div>
 
             <ol className="flex flex-1 flex-col gap-2 overflow-y-auto px-3 pb-3">
-                {results.map((result, index) => (
+                {results.slice(0, revealed).map((result, index) => (
                     <li key={result.key}>
                         <button
                             type="button"
@@ -369,6 +405,12 @@ export const SearchResults = ({
                         )}
                     </li>
                 ))}
+
+                {revealed < results.length && (
+                    <li ref={sentinelRef} className="px-3 py-2 text-xs text-quaternary">
+                        {(results.length - revealed).toLocaleString()} more — scroll to load
+                    </li>
+                )}
             </ol>
         </div>
     );

@@ -19,7 +19,8 @@ const NO_TEXT = resolve(here, "fixtures/sample-no-text.pdf");
 const TWO_COLUMN = resolve(here, "fixtures/sample-two-column-ja.pdf");
 const TOO_MANY_PAGES = resolve(here, "fixtures/sample-too-many-pages-ja.pdf");
 const DENSE = resolve(here, "fixtures/sample-dense-ja.pdf");
-const ALL = [BLANK_PAGE, OVER_LIMIT, ENCRYPTED, NO_TEXT, TWO_COLUMN, TOO_MANY_PAGES, DENSE];
+const NEAR_LIMIT = resolve(here, "fixtures/sample-near-limit-ja.pdf");
+const ALL = [BLANK_PAGE, OVER_LIMIT, ENCRYPTED, NO_TEXT, TWO_COLUMN, TOO_MANY_PAGES, DENSE, NEAR_LIMIT];
 
 test("the limit fixtures are present", () => {
     const missing = ALL.filter((path) => !existsSync(path));
@@ -154,6 +155,52 @@ test.describe("declared limits", () => {
         // Rendered and readable, like every other over-limit document (spec §10).
         await expect(page.locator(".pdf-finder-page").first()).toBeVisible();
         await expect(page.getByLabel("Search query")).toBeDisabled();
+    });
+
+    test("reports every occurrence while mounting only a window of them", async ({ page }) => {
+        // Exact search returns every occurrence and §6.1 forbids capping that. Rendering every
+        // occurrence is a different promise: measured on this fixture, a one-word query produced
+        // 3,744 results, took a second to paint, and left the search box needing 1.6 seconds to
+        // accept four typed characters.
+        await open(page, NEAR_LIMIT);
+        await page.getByRole("radio", { name: "Exact text", exact: true }).click();
+        await page.getByLabel("Search query").fill("協議");
+        await page.getByRole("button", { name: "Search", exact: true }).click();
+
+        await expect(page.locator("ol li").first()).toBeVisible();
+
+        // The count is of the document, not of the list.
+        const reported = Number(/([\d,]+) results/u.exec(await page.locator("aside p").first().innerText())![1].replaceAll(",", ""));
+        expect(reported).toBeGreaterThan(1_000);
+        expect(await page.locator("ol li").count()).toBeLessThan(reported / 10);
+
+        // And the reader is told what is not mounted yet, rather than the list simply ending.
+        await expect(page.getByText(/more — scroll to load/u)).toBeVisible();
+
+        // Typing stays responsive, which is the whole point.
+        const startedAt = Date.now();
+        await page.getByLabel("Search query").fill("協議する");
+        expect(Date.now() - startedAt).toBeLessThan(800);
+    });
+
+    test("keeps every occurrence reachable past the end of the window", async ({ page }) => {
+        await open(page, NEAR_LIMIT);
+        await page.getByRole("radio", { name: "Exact text", exact: true }).click();
+        await page.getByLabel("Search query").fill("協議");
+        await page.getByRole("button", { name: "Search", exact: true }).click();
+        await expect(page.locator("ol li").first()).toBeVisible();
+
+        const mounted = await page.locator("ol li > button").count();
+        expect(mounted).toBeGreaterThan(10);
+
+        // Walk past the end of what is mounted. Next moves through the whole list, so the window
+        // has to follow it rather than the other way round.
+        const next = page.getByRole("button", { name: "Next" });
+        for (let step = 0; step < mounted + 5; step += 1) await next.click();
+
+        await expect(page.locator("ol li > button[aria-current='true']")).toHaveCount(1);
+        expect(await page.locator("ol li > button").count()).toBeGreaterThan(mounted);
+        await expect(page.locator(".pdf-finder-highlight").first()).toBeVisible();
     });
 
     test("stops loading a password-protected document and gives the reason", async ({ page }) => {

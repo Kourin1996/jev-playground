@@ -98,7 +98,7 @@ The page has a top search area, a results panel on the left, and a PDF viewer on
 | Select Exact text                  | Search locally; do not call Jev                                                                                                                                                                                                                                        |
 | Select a result                    | Scroll the passage itself into view on its physical page; highlight the segment for a meaning result, or the matched characters for an exact one                                                                                                                       |
 | Expand a result's context          | Show the neighbouring passages that were sent with it, and open either of them. Labelled as what was sent, never as what the model used — the response does not report which context influenced the answer                                                             |
-| Select Previous or Next            | Move through existing results without another API call. The controls sit at the head of the list, beside the result count                                                                                                                                              |
+| Select Previous or Next            | Move through existing results without another API call. The controls sit at the head of the list, beside the result count, which is always the whole count                                                                                                             |
 | Edit the query without searching   | Keep the results already on screen, still described by the query that produced them — never re-annotated against text nobody searched for                                                                                                                              |
 | Select a passage mid-search        | Keep that passage selected as later batches re-rank the list, and when the final ranking arrives                                                                                                                                                                       |
 | Drag the panel divider             | Resize the results panel against the viewer; also operable from the keyboard. Below 768 px the two panes are shown one at a time instead, chosen by a Results / Document control, and the divider is gone                                                              |
@@ -1306,3 +1306,30 @@ checks the page indicator has not moved.
 The fit-to-width calculation also subtracted a fixed 48-pixel gutter, which on a narrow pane is a
 large fraction of the width and could drive the scale to its floor. It now takes the smaller of that
 gutter and a fifth of the available width.
+
+### 14.26 Every occurrence is returned; not every occurrence is mounted
+
+§6.1 places no cap on exact search and §14.9 says so again: hiding matches behind an unstated limit
+would misreport what the document contains. Rendering all of them is a different promise, and it was
+being kept at the reader's expense.
+
+Measured on `sample-near-limit-ja.pdf`, a one-word query:
+
+| Measure                      |   Before |  After |
+| ---------------------------- | -------: | -----: |
+| Results reported             |    3,744 |  3,744 |
+| Cards mounted                |    3,744 |     50 |
+| Time to the first result     | 1,016 ms | 183 ms |
+| Time to type four characters | 1,571 ms |  33 ms |
+
+The search box taking a second and a half to accept four characters is the part that matters: a
+reader cannot correct a query while the answer to the last one is still being painted.
+
+The list now grows as it is scrolled, fifty at a time, and says how many are not mounted yet rather
+than simply ending. The count above it is always the whole count. Previous and Next move through the
+whole list and the window follows them, so every occurrence stays reachable — a test walks past the
+end of the mounted window and checks the next result is selected and highlighted.
+
+No virtualisation library was added. The measured problem is the cost of mounting thousands of cards
+at once, and growing the list solves it; a sliding window over variable-height rows would buy a
+memory bound nothing has asked for yet.
