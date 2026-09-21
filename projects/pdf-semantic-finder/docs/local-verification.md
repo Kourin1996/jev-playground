@@ -212,8 +212,11 @@ cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
-The disclosure of what leaves the browser sits beside the mode selector and is always visible —
-there is no dialog to dismiss (spec §14.13). Check it is on screen before choosing **Meaning**.
+The disclosure that used to sit beside the mode selector is gone (spec §14.31). What is left is the
+results panel's pre-search line — "**Meaning** asks the model which passage answers the question,
+and sends the extracted text to do it." — which is on screen from the moment a document opens until
+the first search replaces it. Check it is there before choosing **Meaning**, and note that nothing
+says so once results are showing.
 
 Enter `途中でやめたら、お金は戻る？`. The no-refund clause should come back as the first result
 even though the query and the document share no keywords, and the viewer should open it
@@ -235,7 +238,12 @@ Terms of the query that appear literally in a passage should be bold in the prev
 match shows no emphasis at all — that is correct, not a bug: the response never says which words it
 read.
 
-Then select **View extracted text** again. Every segment now carries what Jev judged it to be — a
+Then select **View extracted text** again. The order changes: passages that met either threshold
+come first, highest first, and the rest follow in document order — the number on each card is still
+its position in the document, so reordering costs nothing. **Back to document** is pinned to the top
+right and must stay reachable after scrolling to the bottom of a long extraction.
+
+Every segment now carries what Jev judged it to be — a
 percentage, a bar with both thresholds marked on it, the score and the confidence — including the
 segments no result names. 第4条 should read near 100% and `matched`; the unrelated clauses should
 read `below threshold` with the track still visible at 0%, so an empty bar reads as a zero rather

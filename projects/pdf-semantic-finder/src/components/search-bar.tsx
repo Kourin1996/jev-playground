@@ -4,9 +4,8 @@
  * No request is made while typing: a search runs only on submit or Enter.
  */
 import type { FormEvent } from "react";
-import { InfoCircle, SearchLg } from "@untitledui/icons";
+import { SearchLg } from "@untitledui/icons";
 import { Input } from "@/components/base/input/input";
-import { Tooltip, TooltipTrigger } from "@/components/base/tooltip/tooltip";
 import { LIMITS } from "@/lib/types";
 import type { SearchMode } from "@/lib/types";
 import { cx } from "@/utils/cx";
@@ -85,29 +84,6 @@ export const SearchBar = ({ query, onQueryChange, mode, onModeChange, onSubmit, 
                         </button>
                     ))}
                 </div>
-
-                {/*
-                 * Spec §10's disclosure, beside the control it describes rather than as a dialog.
-                 * Folded behind an icon: it has to be reachable before the first meaning search,
-                 * not permanently occupying the line under the query.
-                 */}
-                {mode === "meaning" && (
-                    <Tooltip
-                        title="What leaves your browser"
-                        description="Meaning search sends your query and text extracted from the PDF to TypeSafe AI. Use only documents you are permitted to send."
-                        placement="bottom"
-                    >
-                        {/*
-                         * The react-aria trigger rather than a plain button: `TooltipTrigger` hands
-                         * its child the hover and focus handlers, so a bare DOM button would never
-                         * open the tooltip — and the disclosure would be unreachable.
-                         */}
-                        <TooltipTrigger aria-label="About meaning search" className="cursor-pointer rounded-full p-1 text-quaternary hover:text-tertiary">
-                            <InfoCircle className="size-4" />
-                        </TooltipTrigger>
-                    </Tooltip>
-                )}
-                {mode === "meaning" && <p className="text-xs text-quaternary">Sends your query and the extracted text to TypeSafe AI.</p>}
             </div>
 
             {disabledReason !== undefined && <p className="text-sm text-error-primary">{disabledReason}</p>}

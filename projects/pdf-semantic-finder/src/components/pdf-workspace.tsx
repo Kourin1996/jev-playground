@@ -770,7 +770,11 @@ export const PdfWorkspace = () => {
                                      */}
                                     {showExtractedText && (
                                         <div className="absolute inset-0 overflow-y-auto rounded-tl-2xl bg-primary">
-                                            <ExtractedTextView segments={loaded.segments} evaluations={evaluations} />
+                                            <ExtractedTextView
+                                                segments={loaded.segments}
+                                                evaluations={evaluations}
+                                                onClose={() => setShowExtractedText(false)}
+                                            />
                                         </div>
                                     )}
                                 </div>

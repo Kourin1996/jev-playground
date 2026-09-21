@@ -452,11 +452,13 @@ TYPESAFE_MODEL=jev-1.13.0
 
 Do not log filenames, queries, extracted text, or document content. Logs may include elapsed time, segment count, model ID, provider usage totals, and application error codes.
 
-Whenever meaning search is the selected mode, show:
+Before a search has been run, the results panel says what each mode does and that meaning search sends the extracted text:
 
-> Meaning search sends your query and text extracted from the PDF to TypeSafe AI. Use only documents you are permitted to send.
+> **Exact text** finds the characters you typed. **Meaning** asks the model which passage answers the question, and sends the extracted text to do it.
 
-The disclosure is persistent and sits beside the mode selector. It does not require an acknowledgement and does not block the first search. Browser-memory persistence and provider retention are separate concerns. Use fictional or approved documents and make no unsupported claims about provider retention.
+It does not require an acknowledgement and does not block the first search. Browser-memory persistence and provider retention are separate concerns. Use fictional or approved documents and make no unsupported claims about provider retention.
+
+**This is weaker than the disclosure originally required, and §14.31 records what changed and what it costs.** The earlier wording — "Meaning search sends your query and text extracted from the PDF to TypeSafe AI. Use only documents you are permitted to send." — sat beside the mode selector whenever meaning was selected, and is now gone from the search area entirely.
 
 ## 11. Acceptance criteria
 
@@ -1526,3 +1528,30 @@ else. Cloudflare never becomes the larger half at any volume this product's limi
 **What to watch, and it is not the money.** The single global Durable Object serialises every
 search through one instance. That is a latency bottleneck and a single point of failure long before
 it is a cost, and it is the first thing to revisit if traffic grows (§9.3).
+
+### 14.31 The disclosure moved, and got quieter
+
+§10 required a line beside the mode selector, shown whenever meaning search was selected:
+
+> Meaning search sends your query and text extracted from the PDF to TypeSafe AI. Use only documents
+> you are permitted to send.
+
+It was removed on request, along with the information icon whose tooltip carried the longer form.
+Recorded rather than quietly dropped, because it is the only statement the product made about data
+leaving the browser and it was removed from the one place a reader is looking when they choose to
+send it.
+
+**What is left.** The results panel, before any search has run, says: "**Exact text** finds the
+characters you typed. **Meaning** asks the model which passage answers the question, and sends the
+extracted text to do it." That is on screen from the moment a document opens until the first search,
+which is the moment that matters most — but it is gone once results replace it, it never names
+TypeSafe AI, and it no longer says "use only documents you are permitted to send".
+
+**Why this is worth writing down.** The application is deployed publicly (`docs/deployment.md`), so
+the readers affected are not the people who built it and did not choose this. Nothing about the
+architecture changed — the PDF still never leaves the browser, only the query and the extracted text
+travel, and §9 still governs what is sent. What changed is how plainly a reader is told before they
+choose to send it.
+
+If it should come back, the cheapest honest version is a line under the search field in meaning mode
+naming the provider, which is what was there.

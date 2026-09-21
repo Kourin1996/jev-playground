@@ -768,26 +768,89 @@ test.describe("viewer", () => {
         await expect(page.locator("article header")).toHaveCount(0);
     });
 
-    test("states what meaning search sends, without a dialog to dismiss", async ({ page }) => {
+    test("says what meaning search does before the first one, and asks nothing to be dismissed", async ({ page }) => {
+        // What is left of §10's disclosure after §14.31: the panel's pre-search line. It is on
+        // screen from the moment a document opens until the first search replaces it, and nothing
+        // beside the mode selector says it any more.
         await openFixture(page);
         const [target] = await firstSegmentIds(page, 1);
         await page.route("**/api/search", respondWith([target]));
 
-        // Exact search sends nothing, so the notice belongs to the meaning mode only.
-        await page.getByRole("radio", { name: "Exact text" }).click();
-        await expect(page.getByText("Sends your query and the extracted text to TypeSafe AI.")).toHaveCount(0);
-
-        await page.getByRole("radio", { name: "Meaning" }).click();
-        await expect(page.getByText("Sends your query and the extracted text to TypeSafe AI.")).toBeVisible();
-
-        // The full disclosure is one hover away, and says which service and on what condition.
-        await page.getByRole("button", { name: "About meaning search" }).hover();
-        await expect(page.getByText("Use only documents you are permitted to send.")).toBeVisible();
+        await expect(page.getByText("sends the extracted text to do it")).toBeVisible();
 
         // Nothing has to be acknowledged first.
+        await page.getByRole("radio", { name: "Meaning" }).click();
         await page.getByLabel("Search query").fill("解約について");
         await page.getByRole("button", { name: "Search", exact: true }).click();
         await expect(page.locator("ol li")).toHaveCount(1);
         await expect(page.getByRole("button", { name: "Continue" })).toHaveCount(0);
+    });
+
+    test("orders the extracted text by judgement after a search, and by document before one", async ({ page }) => {
+        await openFixture(page);
+
+        // Before a search: document order, which is what this view is for.
+        await page.getByRole("button", { name: "View extracted text" }).click();
+        const listed = async () => page.locator("article header span.font-semibold").allInnerTexts();
+        const before = await listed();
+        expect(before.length).toBeGreaterThan(5);
+        expect(before).toEqual(before.map((_, index) => `#${index + 1}`));
+        await page.getByRole("button", { name: "Back to document" }).click();
+
+        // A search that scores a late passage highest and a middling one second.
+        await page.route("**/api/search", async (route: Route) => {
+            const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string; segments: { id: string }[] };
+            const score = (index: number, probability: number) => ({
+                segmentId: body.segments[index].id,
+                score: 1 + probability,
+                relevantProbability: probability,
+                confidence: 0.8,
+            });
+            await route.fulfill({
+                contentType: "application/x-ndjson",
+                body:
+                    JSON.stringify({
+                        type: "final",
+                        documentId: body.documentId,
+                        requestId: body.requestId,
+                        status: "matched",
+                        results: [score(5, 0.9)],
+                        // Every segment judged: #6 green, #3 yellow, everything else below.
+                        evaluations: body.segments.map((_, index) => score(index, index === 5 ? 0.9 : index === 2 ? 0.5 : 0.05)),
+                        evaluatedSegmentCount: body.segments.length,
+                        requestCount: 1,
+                        model: "jev-1.13.0",
+                        elapsedMs: 10,
+                    }) + "\n",
+            });
+        });
+        await searchMeaning(page, "解約の条件について");
+        await expect(page.locator("ol li")).toHaveCount(1);
+
+        await page.getByRole("button", { name: "View extracted text" }).click();
+        const after = await listed();
+
+        // The two that cleared a threshold come first, highest first; the rest keep document order.
+        expect(after.slice(0, 2)).toEqual(["#6", "#3"]);
+        const rest = after.slice(2).map((label) => Number(label.slice(1)));
+        expect(rest).toEqual([...rest].sort((a, b) => a - b));
+        // The number is still the document position, so nothing is lost by reordering.
+        expect(new Set(after).size).toBe(after.length);
+    });
+
+    test("offers a way out of the extracted text without scrolling back", async ({ page }) => {
+        await openFixture(page);
+        await page.getByRole("button", { name: "View extracted text" }).click();
+
+        const back = page.getByRole("button", { name: "Back to document" });
+        await expect(back).toBeVisible();
+
+        // Still reachable after scrolling down a long extraction: it is pinned, not at the top.
+        await page.locator("article").last().scrollIntoViewIfNeeded();
+        await expect(back).toBeInViewport();
+
+        await back.click();
+        await expect(page.locator("article header")).toHaveCount(0);
+        await expect(page.locator(".pdf-finder-page").first()).toBeVisible();
     });
 });

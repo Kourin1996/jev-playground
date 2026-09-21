@@ -8,7 +8,9 @@
  *
  * The context is shown alongside, because what was sent is not the passage alone.
  */
+import { ArrowLeft } from "@untitledui/icons";
 import { Badge } from "@/components/base/badges/badges";
+import { Button } from "@/components/base/buttons/button";
 import type { PdfSegment, SearchResultRecord } from "@/lib/types";
 import { THRESHOLDS, countCharacters } from "@/lib/types";
 import { cx } from "@/utils/cx";
@@ -21,6 +23,8 @@ export type ExtractedTextViewProps = {
      * but the lookup must not depend on the two lists staying in step.
      */
     evaluations: Map<string, SearchResultRecord> | null;
+    /** Closes the view and returns to the document. */
+    onClose: () => void;
 };
 
 /** The three levels Jev is asked to choose between (spec §6.3). */
@@ -67,21 +71,63 @@ const Judgement = ({ evaluation }: { evaluation: SearchResultRecord }) => {
     );
 };
 
-export const ExtractedTextView = ({ segments, evaluations }: ExtractedTextViewProps) => (
+/**
+ * The order the passages are listed in.
+ *
+ * Document order until a search has run, because that is what this view is for: the segment order
+ * checked against the rendered page is one of the two things visible nowhere else.
+ *
+ * After a search, the passages that cleared either §7 threshold come first, highest first, and
+ * everything else follows in document order. The judgements are the reason to open this view after
+ * a search, and hunting for the few that scored through hundreds that did not is not reading.
+ *
+ * The number on each card stays its **document** position, so reordering the list does not cost the
+ * information the list was ordered by in the first place.
+ */
+const listOrder = (segments: readonly PdfSegment[], evaluations: Map<string, SearchResultRecord> | null) => {
+    const numbered = segments.map((segment, index) => ({ segment, position: index + 1, evaluation: evaluations?.get(segment.id) }));
+    if (evaluations === null) return numbered;
+
+    const scoreOf = (entry: (typeof numbered)[number]) => entry.evaluation?.relevantProbability ?? -1;
+    const judged = numbered.filter((entry) => scoreOf(entry) >= THRESHOLDS.uncertain);
+    const rest = numbered.filter((entry) => scoreOf(entry) < THRESHOLDS.uncertain);
+
+    // Same tie-break as the result list (§7), so the two cannot disagree about which is higher.
+    judged.sort((a, b) => scoreOf(b) - scoreOf(a) || (b.evaluation?.score ?? 0) - (a.evaluation?.score ?? 0));
+
+    return [...judged, ...rest];
+};
+
+export const ExtractedTextView = ({ segments, evaluations, onClose }: ExtractedTextViewProps) => (
     <div className="flex flex-col gap-2 p-6">
+        {/*
+         * Sticky rather than at the top of the scroll: this view is hundreds of cards long, and a
+         * way out that is only reachable by scrolling back is not a way out.
+         */}
+        <div className="sticky top-0 z-10 -mt-2 flex justify-end pt-2 pb-2">
+            <Button size="sm" color="secondary" iconLeading={ArrowLeft} onClick={onClose}>
+                Back to document
+            </Button>
+        </div>
+
         {evaluations === null && (
             <p className="px-1 pb-1 text-sm text-tertiary">
                 Run a meaning search to see what each passage was judged to be. Until then this shows the extraction only.
             </p>
         )}
 
-        {segments.map((segment, index) => {
-            const evaluation = evaluations?.get(segment.id);
+        {evaluations !== null && (
+            <p className="px-1 pb-1 text-sm text-tertiary">
+                Passages that met either threshold come first, highest first. The rest follow in document order, and the number on each card is always its
+                position in the document.
+            </p>
+        )}
 
+        {listOrder(segments, evaluations).map(({ segment, position, evaluation }) => {
             return (
                 <article key={segment.id} className="flex flex-col gap-2 rounded-xl bg-secondary p-4">
                     <header className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-semibold text-primary">#{index + 1}</span>
+                        <span className="text-sm font-semibold text-primary">#{position}</span>
                         <Badge size="sm" color="gray" type="modern">
                             {segment.id}
                         </Badge>
