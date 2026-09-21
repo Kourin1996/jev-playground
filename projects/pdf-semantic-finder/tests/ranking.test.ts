@@ -300,6 +300,47 @@ describe("packBatches", () => {
         expect(batches[0].evaluate).toHaveLength(2);
     });
 
+    it("sends the same total whatever the batch size, because a batch is not a cost lever", () => {
+        /*
+         * §14.20 used to claim that doubling `maxSegmentsPerBatch` would cut input tokens by about
+         * a quarter. It was an arithmetic error: one instruction string is built per *question*
+         * and a question is asked about every segment, so N segments send N instruction strings
+         * whatever the batch size — and each segment appears in exactly one batch's state, so the
+         * state carries N passages in total either way. Doubling the batch halves the requests and
+         * doubles what each carries; the two cancel.
+         *
+         * Pinned here because someone will otherwise reach for the batch size to make a search
+         * cheaper, and it does not do that. It trades latency against the judgement (§14.19).
+         */
+        const segments = Array.from({ length: 60 }, (_, index) => ({
+            ...segment(index + 1, "あ".repeat(200)),
+            contextBefore: "い".repeat(200),
+            contextAfter: "う".repeat(200),
+        }));
+
+        /** Packs at an arbitrary size, the way `packBatches` does, and measures what goes out. */
+        const totalBytes = (size: number) => {
+            let bytes = 0;
+            for (let start = 0; start < segments.length; start += size) {
+                const evaluate = segments.slice(start, start + size);
+                const state = [...evaluate];
+                for (let index = 0; state.length < size && index < segments.length; index += 1) {
+                    if (!state.includes(segments[index])) state.push(segments[index]);
+                }
+                bytes += new TextEncoder().encode(JSON.stringify(buildJevRequest("jev-1.13.0", "解約したらお金は戻りますか", { evaluate, state }))).byteLength;
+            }
+            return bytes;
+        };
+
+        const sizes = [1, 2, 4, 8, 15];
+        const measured = sizes.map(totalBytes);
+        const smallest = Math.min(...measured);
+        const largest = Math.max(...measured);
+
+        // Flat to within a few per cent, across a fifteenfold change in the number of requests.
+        expect((largest - smallest) / smallest).toBeLessThan(0.05);
+    });
+
     it("keeps the character budget above what a full batch can carry", () => {
         // The count is what binds now. If characters could force a smaller batch, the states would
         // stop being uniform and the whole reason for the packing would be gone.

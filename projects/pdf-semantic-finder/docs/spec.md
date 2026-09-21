@@ -1151,9 +1151,32 @@ TypeSafe AI charges **$42 per billion input tokens and nothing for output**, so 
 **Where the input goes.** A four-passage request measured 3,092 input tokens on dense Japanese:
 2,048 for the state and 1,044 for the four instruction strings, which is 261 tokens a question.
 Within the state each passage's text travels three times — itself plus two neighbours' context —
-so the context is roughly 44% of the input. Raising `maxSegmentsPerBatch` to 8 would halve the
-instruction share and cut input tokens by about a quarter, and §14.19 is the reason it is 4: the
-saving would be paid for in the judgement.
+so the context is roughly 44% of the input.
+
+**Correction: the batch size does not change what a search costs.** This section previously said
+raising `maxSegmentsPerBatch` to 8 would "cut input tokens by about a quarter". That was an
+arithmetic error. One instruction string is built per _question_, and a question is asked about
+every segment, so a document of N segments sends N instruction strings whatever the batch size; and
+each segment appears in exactly one batch's state, so the state carries N passages in total either
+way. Doubling the batch halves the number of requests and doubles what each carries, and the two
+cancel.
+
+Measured over 217 segments of 200 characters with two neighbours each, total request bytes:
+
+| `maxSegmentsPerBatch` | Requests | Total bytes |
+| --------------------: | -------: | ----------: |
+|                     1 |      217 |     686,371 |
+|                     2 |      109 |     676,460 |
+|                     4 |       55 |     674,296 |
+|                     8 |       28 |     678,797 |
+|                    16 |       14 |     677,271 |
+
+Under 2% between the extremes, and 4 is at the minimum. The two things that do vary are the query,
+which repeats once per request and makes small batches slightly more expensive, and the padding on
+the final batch (§6.4), which makes large ones slightly more expensive.
+
+So the batch size is not a cost lever. It trades **latency** — 55 requests is three rounds at a
+concurrency of 24, 28 requests is two — against the **judgement**, and §14.19 is why it is 4.
 
 **What actually bounds the page limit.** Measured at 48 pages and 1,872 units:
 
