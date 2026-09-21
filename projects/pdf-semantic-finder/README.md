@@ -99,6 +99,11 @@ npm run deploy       # build, then wrangler deploy
 
 ### Deployment
 
+[docs/deployment.md](docs/deployment.md) is the runbook for putting this on the public internet at
+`pdf-finder.kourin.jp`: prerequisites, secrets, the deploy itself, the checks that can only be made
+after it, rollback, and an honest list of what a public deployment still does not cover. A Japanese
+translation is at [docs/deployment.ja.md](docs/deployment.ja.md). What follows is the summary.
+
 **Workers Paid is required.** A search at the 2,000-segment cap issues 500 provider calls in a
 single Worker invocation, and up to 1,000 with the one retry the specification allows. Workers Free
 allows 50 subrequests, so a document of about 200 segments already exceeds it — the failure would
@@ -131,7 +136,11 @@ sent, so it is always present in production and cannot be suppressed to escape t
 confirm after deploying that a refusal actually happens, with its `Retry-After`.
 
 Publish `dist/client`, never `dist/` — `dist/pdf_finder` holds the built Worker and, locally, a
-copy of `.dev.vars`.
+copy of `.dev.vars`. `wrangler deploy` already does the right thing; `npx wrangler deploy --dry-run`
+shows exactly what would be uploaded.
+
+The public hostname is `pdf-finder.kourin.jp`, configured as a custom domain, and `workers_dev` is
+off so the Worker is not also reachable at a `workers.dev` address nobody announced.
 
 ### What it costs
 

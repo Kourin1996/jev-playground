@@ -7,17 +7,41 @@
  * carries the same policy for the responses that never reach here, and the two must be kept
  * identical — this module is not the whole story on its own.
  *
- * The `Content-Security-Policy` proper is deliberately not here yet. It has to be written against
- * what PDF.js actually loads — WebAssembly, a worker that may be a blob, and a text layer that
- * positions every span through an inline style — and a policy that has not been exercised against
- * the real viewer is a policy that breaks the product. It arrives with the test that opens a PDF
- * and asserts no violation.
+ * The policy below is written against what this application actually loads, and
+ * `tests/headers.spec.ts` opens a PDF, zooms it and searches it against a built preview while
+ * asserting the console stays clear. A policy nobody exercised against the real viewer is a policy
+ * that breaks the product.
+ *
+ * Each directive earns its place:
+ *
+ * - `'wasm-unsafe-eval'` — PDF.js ships WebAssembly under `/pdfjs/wasm/` for image codecs such as
+ *   JPEG 2000, and WebAssembly instantiation is governed by `script-src`. **Precautionary, and not
+ *   demonstrated:** removing it leaves every fixture in this repository working, because none of
+ *   them contains an image that reaches that path. It stays because a reader's PDF may, and the
+ *   failure would be a page that silently renders wrong. Anyone tightening this should first add a
+ *   fixture that exercises the codec, not simply delete the directive because the suite stays
+ *   green.
+ * - `worker-src 'self' blob:` — the PDF.js worker is emitted same-origin by the bundler, and
+ *   `blob:` covers its fallback of constructing the worker from a blob URL.
+ * - `style-src 'unsafe-inline'` — not removable by a nonce. The text layer positions every span
+ *   with an inline `style` attribute, which nonces do not cover, and react-aria injects more.
+ * - `font-src` and part of `style-src` — the Inter stylesheet and its font files, from Google.
+ * - `connect-src 'self'` — every request the page makes is same-origin: `/api/search`, and
+ *   PDF.js's CMaps, WASM, ICC profiles and standard fonts under `/pdfjs/`. **The browser never
+ *   contacts the provider**; the Worker does. That absence is itself a check on the architecture
+ *   boundary — if this ever needs a provider host, something has moved to the wrong side.
+ * - `form-action 'none'` — the search form never navigates; it is submitted through JavaScript and
+ *   prevented. If the script fails, the fallback navigation is blocked rather than leaking the
+ *   query into a URL.
  */
+
+const CONTENT_SECURITY_POLICY =
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /** Set on every response, and safe on every response: none of them can break a working page. */
 const SECURITY_HEADERS = {
-    // The document is never framed. `frame-ancestors` will restate this once the CSP lands; this
-    // header is what every browser honours today.
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    // `frame-ancestors` above says this too; this is what the oldest browsers honour.
     "X-Frame-Options": "DENY",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",

@@ -2,11 +2,10 @@
 #
 # `wrangler.jsonc` does not set `run_worker_first`, so the asset router answers /index.html and
 # /assets/* directly; worker/http/security-headers.ts covers only the single-page-application
-# fallback. The two sets must stay identical.
-#
-# The Content-Security-Policy is not here yet: it has to be written against what PDF.js actually
-# loads and verified against the real viewer, which is a separate change with its own test.
+# fallback and anything the Worker serves itself. The two sets must stay identical, and
+# `tests/headers.spec.ts` checks that they do.
 /*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer

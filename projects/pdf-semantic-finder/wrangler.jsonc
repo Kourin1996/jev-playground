@@ -3,6 +3,19 @@
     "name": "pdf-finder",
     "main": "worker/index.ts",
     "compatibility_date": "2026-09-20",
+    /*
+     * The public hostname, and the only one.
+     *
+     * `workers_dev: false` matters as much as the route: left at its default the Worker is also
+     * reachable at `pdf-finder.<account>.workers.dev`, which is a second public origin nobody
+     * announced, outside the zone's WAF and analytics, and not the origin the same-origin check in
+     * §9.1 was reasoned about.
+     *
+     * `kourin.jp` must already be a zone on the account; `custom_domain` makes Cloudflare create
+     * and manage the DNS record and the certificate for the subdomain.
+     */
+    "routes": [{ "pattern": "pdf-finder.kourin.jp", "custom_domain": true }],
+    "workers_dev": false,
     // Serves the built client and the Worker from one origin, which is what spec §9.1 requires.
     "assets": {
         "directory": "./dist/client",
