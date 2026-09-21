@@ -84,7 +84,7 @@ PDF in browser
 ## Development
 
 ```bash
-npm install          # also copies the PDF.js runtime assets into public/pdfjs/
+npm install          # also copies the PDF.js runtime assets and generates worker-env.d.ts
 npm run dev          # Vite and the Worker on http://localhost:5173, one origin
 npm run build        # type-check every project and build the client and the Worker
 npm run typecheck    # tsc -b across app, worker, node, and test projects
@@ -96,6 +96,11 @@ npm run verify       # assets + typecheck + unit tests + E2E, in one go
 npm run eval         # the fixed evaluation set; needs fixture PDFs and a credential
 npm run deploy       # build, then wrangler deploy
 ```
+
+`worker-env.d.ts` is generated, not committed: it is `wrangler types` output, so it is derived from
+`wrangler.jsonc` and goes stale the moment a binding changes. `npm install` produces it through the
+`prepare` script, which is why a fresh clone type-checks without a separate step. Regenerate it with
+`npm run cf-typegen` after editing `wrangler.jsonc`.
 
 ### Deployment
 

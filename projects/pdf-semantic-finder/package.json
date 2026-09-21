@@ -13,7 +13,7 @@
         "test:watch": "vitest",
         "test:e2e": "playwright test",
         "eval": "node --experimental-strip-types tests/run-evaluation.ts",
-        "prepare": "node scripts/copy-pdfjs-assets.mjs",
+        "prepare": "node scripts/copy-pdfjs-assets.mjs && wrangler types --path worker-env.d.ts",
         "cf-typegen": "wrangler types --path worker-env.d.ts",
         "deploy": "npm run build && wrangler deploy",
         "fixtures:sample": "node scripts/make-sample-pdf.mjs",
