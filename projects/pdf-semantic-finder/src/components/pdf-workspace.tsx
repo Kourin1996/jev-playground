@@ -28,9 +28,6 @@ import type { PdfSegment } from "@/lib/types";
 import type { SearchErrorCode, SearchHit, SearchMode, SearchResultRecord, SearchStatus } from "@/lib/types";
 import { LIMITS } from "@/lib/types";
 
-/** No result is being shown in the viewer. */
-const NO_SELECTION = -1;
-
 /** Zoom is stored to two decimals so the label and the rendered scale cannot disagree. */
 const round = (value: number) => Number(value.toFixed(2));
 
@@ -109,13 +106,27 @@ export const PdfWorkspace = () => {
     const [status, setStatus] = useState<SearchStatus | null>(null);
     const [results, setResults] = useState<SearchHit[]>([]);
     /**
-     * Index of the result being shown in the viewer, or `NO_SELECTION`.
+     * The **key** of the result being shown in the viewer, or null.
+     *
+     * Not an index. While a meaning search streams, the list is re-ranked with every batch, so
+     * position *n* can become a different passage between two frames — the viewer would follow
+     * along and highlight somewhere else without anything having been selected. A key follows the
+     * passage.
      *
      * Any search that produced candidates opens its highest ranked one, uncertain included: the
      * reader asked to be taken to the passage, and the uncertain note above the list already says
      * how much weight to give it.
      */
-    const [selectedIndex, setSelectedIndex] = useState(NO_SELECTION);
+    const [selectedKey, setSelectedKey] = useState<string | null>(null);
+    /**
+     * The query and mode that produced `results`, which are not always the ones in the search bar.
+     *
+     * Editing the query or switching mode does not clear the results — there is nothing wrong with
+     * still seeing what you last searched for. What is wrong is describing those results with the
+     * text now in the box: the panel emphasises query terms and words an empty result differently
+     * per mode, so a stale list was being annotated against a search nobody had run.
+     */
+    const [submitted, setSubmitted] = useState<{ query: string; mode: SearchMode } | null>(null);
     const [searchError, setSearchError] = useState<string | null>(null);
     const [searchMs, setSearchMs] = useState<number | null>(null);
     /**
@@ -163,7 +174,9 @@ export const PdfWorkspace = () => {
         setSearchMs(null);
         setStatus(null);
         setResults([]);
-        setSelectedIndex(NO_SELECTION);
+        setSelectedKey(null);
+        hasChosenResultRef.current = false;
+        setSubmitted(null);
         setSearchError(null);
         setHighlightFailure(null);
         setEvaluations(null);
@@ -252,6 +265,22 @@ export const PdfWorkspace = () => {
         [loaded, resetSearchState],
     );
 
+    /**
+     * Whether the reader has chosen a passage themselves.
+     *
+     * Until they have, re-ranking may move the selection to whatever is now first; once they have,
+     * it stays where they put it — including when the final response lands, which used to reset the
+     * selection to the top and undo their choice at the last moment.
+     *
+     * A ref rather than state because the streaming callback is created once per search and would
+     * otherwise keep reading the value captured when it was made.
+     */
+    const hasChosenResultRef = useRef(false);
+    const selectResult = useCallback((key: string) => {
+        hasChosenResultRef.current = true;
+        setSelectedKey(key);
+    }, []);
+
     /** Stops loading the document currently being opened, so a slow import can be abandoned. */
     const cancelLoad = useCallback(() => {
         loadAbortRef.current?.abort();
@@ -274,6 +303,9 @@ export const PdfWorkspace = () => {
             currentRequestIdRef.current = requestId;
 
             resetSearchState();
+            // Recorded with the results, so the panel describes what was searched rather than
+            // whatever is in the box by the time the answer arrives.
+            setSubmitted({ query, mode: searchMode });
             const searchStartedAt = performance.now();
 
             if (searchMode === "exact") {
@@ -291,7 +323,7 @@ export const PdfWorkspace = () => {
                 // Every occurrence is shown: the three-result cap in spec §2 is about ranked
                 // relevance, which exact search does not produce.
                 setResults(outcome.hits);
-                setSelectedIndex(outcome.hits.length > 0 ? 0 : NO_SELECTION);
+                setSelectedKey(outcome.hits[0]?.key ?? null);
                 setSearchMs(Math.round(performance.now() - searchStartedAt));
                 return;
             }
@@ -323,11 +355,13 @@ export const PdfWorkspace = () => {
                     if (currentDocumentIdRef.current !== documentId || currentRequestIdRef.current !== requestId) return;
 
                     setProgress({ evaluated: update.evaluated, total: update.total });
-                    setResults((current) => {
-                        const next = toHits(update.results);
-                        // Leave the selection alone once the reader has moved it.
-                        if (current.length === 0 && next.length > 0) setSelectedIndex(0);
-                        return next;
+                    const next = toHits(update.results);
+                    setResults(next);
+                    // Follows the ranking until the reader picks a passage, then stays where they
+                    // put it — and it is a key, so re-ranking cannot silently move it elsewhere.
+                    setSelectedKey((current) => {
+                        if (hasChosenResultRef.current && current !== null && next.some((hit) => hit.key === current)) return current;
+                        return next[0]?.key ?? current;
                     });
                 });
 
@@ -336,6 +370,12 @@ export const PdfWorkspace = () => {
                 if (currentRequestIdRef.current !== requestId) return;
 
                 if (!outcome.ok) {
+                    // A failed search has no results, whatever arrived before it failed. Leaving
+                    // the provisional list highlighted under a panel that says the search could
+                    // not be completed offers the reader a passage nothing stands behind.
+                    setResults([]);
+                    setSelectedKey(null);
+                    setEvaluations(null);
                     setSearchError(ERROR_TEXT[outcome.code] ?? "The search could not be completed.");
                     return;
                 }
@@ -352,7 +392,12 @@ export const PdfWorkspace = () => {
                 setResults(views);
                 setEvaluations(new Map((outcome.response.evaluations ?? []).map((record) => [record.segmentId, record])));
                 setLastSearchCost({ questions: loaded.segments.length, requests: outcome.response.requestCount });
-                setSelectedIndex(views.length > 0 ? 0 : NO_SELECTION);
+                // A reader who chose a passage while the search was still running keeps it, as
+                // long as the final ranking still contains it. This used to reset to the top and
+                // undo their choice at the last moment.
+                setSelectedKey((current) =>
+                    hasChosenResultRef.current && current !== null && views.some((hit) => hit.key === current) ? current : (views[0]?.key ?? null),
+                );
                 setSearchMs(Math.round(performance.now() - searchStartedAt));
             } catch (error) {
                 if ((error as Error | undefined)?.name === "AbortError") return;
@@ -361,6 +406,9 @@ export const PdfWorkspace = () => {
                 // exists so the invariant survives a future path that supersedes without aborting.
                 if (currentDocumentIdRef.current !== documentId) return;
                 if (currentRequestIdRef.current !== requestId) return;
+                setResults([]);
+                setSelectedKey(null);
+                setEvaluations(null);
                 setSearchError("The search could not be completed.");
             } finally {
                 // Keyed on the request rather than on the abort flag: an aborted search whose
@@ -396,15 +444,8 @@ export const PdfWorkspace = () => {
                 ...neighbourContext(loaded.segments, segment),
             };
 
-            setResults((current) => {
-                const existing = current.findIndex((entry) => entry.key === hit.key);
-                if (existing >= 0) {
-                    setSelectedIndex(existing);
-                    return current;
-                }
-                setSelectedIndex(current.length);
-                return [...current, hit];
-            });
+            setResults((current) => (current.some((entry) => entry.key === hit.key) ? current : [...current, hit]));
+            selectResult(hit.key);
         },
         [loaded],
     );
@@ -510,7 +551,7 @@ export const PdfWorkspace = () => {
         return "This passage could not be located in the rendered page, so it is not highlighted.";
     }, [highlightFailure]);
 
-    const highlightedHit = results[selectedIndex] ?? null;
+    const highlightedHit = results.find((hit) => hit.key === selectedKey) ?? null;
 
     const pageSummary =
         loaded === null
@@ -592,15 +633,15 @@ export const PdfWorkspace = () => {
                                     hasDocument={loaded !== null}
                                     status={status}
                                     results={results}
-                                    selectedIndex={selectedIndex}
-                                    onSelect={setSelectedIndex}
+                                    selectedKey={selectedKey}
+                                    onSelect={selectResult}
                                     errorMessage={searchError}
                                     locationErrorMessage={highlightMessage}
                                     unsearchedPages={unsearchedPages}
                                     unsupportedLayoutPages={unsupportedLayoutPages}
                                     onOpenSegment={openSegment}
-                                    mode={mode}
-                                    query={query}
+                                    mode={submitted?.mode ?? mode}
+                                    query={submitted?.query ?? ""}
                                     progress={progress}
                                 />
                             </aside>

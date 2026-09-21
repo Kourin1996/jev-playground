@@ -12,6 +12,7 @@ import type { Page, Route } from "@playwright/test";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { installControlledStream, releaseFinalLine, releaseNextProgress } from "./controlled-stream";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -569,6 +570,170 @@ test.describe("viewer", () => {
         await divider.focus();
         await divider.press("ArrowLeft");
         expect((await panel.boundingBox())!.width).toBeLessThan(dragged);
+    });
+
+    test.describe("results belong to the search that produced them", () => {
+        test("does not re-describe an old result list with the edited query", async ({ page }) => {
+            // Reproduced: after a meaning search, typing a new query re-emphasised the *old*
+            // passages against text nobody had searched for, and switching to Exact text relabelled
+            // them as exact results.
+            await openFixture(page);
+            const [target] = await firstSegmentIds(page, 1);
+            await page.route("**/api/search", respondWith([target]));
+
+            // A query whose text really appears in the passage, so there is emphasis to lose.
+            await searchMeaning(page, "第1条");
+            await expect(page.locator("ol li mark")).not.toHaveCount(0);
+
+            // Edit without submitting. The results stay — there is nothing wrong with still seeing
+            // what you last searched for — but they are still described by the query that made them.
+            await page.getByLabel("Search query").fill("まったく関係のない語");
+            await expect(page.locator("ol li")).toHaveCount(1);
+            await expect(page.locator("ol li mark")).not.toHaveCount(0);
+
+            // And switching mode does not relabel them either.
+            await page.getByRole("radio", { name: "Exact text" }).click();
+            await expect(page.locator("ol li")).toHaveCount(1);
+            await expect(page.getByText("Model judgment")).toBeVisible();
+        });
+
+        test("keeps the reader's chosen passage when the final ranking arrives", async ({ page }) => {
+            // Selection used to be an array index, and the final response reset it to zero — so a
+            // reader who picked the second passage while the search was still streaming had their
+            // choice undone at the last moment.
+            await openFixture(page);
+            const ids = await firstSegmentIds(page, 3);
+            await page.route("**/api/search", respondWith(ids));
+
+            await searchMeaning(page, "解約の条件について");
+            await expect(page.locator("ol li")).toHaveCount(3);
+
+            // Compared on the passage text rather than the whole card: selecting a card reveals
+            // its context control, so the card's own text is not the same before and after.
+            const preview = (index: number) => page.locator("ol li span.line-clamp-4").nth(index).innerText();
+            const secondPassage = await preview(1);
+
+            await page.locator("ol li > button").nth(1).click();
+            await expect(page.locator("ol li > button[aria-current='true']")).toContainText(secondPassage.slice(0, 20));
+
+            // Re-running the same search re-ranks the list; the reader has not chosen in the new
+            // one, so it opens at the top again.
+            await searchMeaning(page, "解約の条件について");
+            await expect(page.locator("ol li > button[aria-current='true']")).toContainText((await preview(0)).slice(0, 20));
+        });
+
+        test("keeps a passage chosen while the search was still streaming", async ({ page }) => {
+            // The case an index cannot survive. The reader picks the second passage mid-search; the
+            // final line then re-ranks the list so that passage is no longer second and no longer
+            // first. An index would follow the position and quietly highlight someone else.
+            await installControlledStream(page, { provisional: [[0, 1, 2]], final: [2, 0, 1] });
+            await openFixture(page);
+
+            await searchMeaning(page, "解約の条件について");
+            await expect(page.locator("ol li")).toHaveCount(3);
+
+            const preview = (index: number) => page.locator("ol li span.line-clamp-4").nth(index).innerText();
+            const chosen = (await preview(1)).slice(0, 20);
+            await page.locator("ol li > button").nth(1).click();
+
+            await releaseFinalLine(page);
+            await expect(page.getByText("may still change")).toHaveCount(0);
+
+            // Same passage, different position.
+            await expect(page.locator("ol li > button[aria-current='true']")).toContainText(chosen);
+            expect((await preview(1)).slice(0, 20)).not.toBe(chosen);
+        });
+
+        test("keeps a chosen passage while later batches re-rank the list", async ({ page }) => {
+            // The defect in the place it actually bites: a long search sends a progress line per
+            // batch, each one re-ranking. With an index, the reader's passage drifts under them
+            // while they are reading it.
+            await installControlledStream(page, {
+                provisional: [
+                    [0, 1, 2],
+                    // The chosen passage moves to *last*, so a selection that followed the
+                    // position would land somewhere else entirely rather than coincidentally
+                    // staying put.
+                    [2, 0, 1],
+                ],
+                final: [2, 0, 1],
+            });
+            await openFixture(page);
+
+            await searchMeaning(page, "解約の条件について");
+            await expect(page.locator("ol li")).toHaveCount(3);
+
+            const preview = (index: number) => page.locator("ol li span.line-clamp-4").nth(index).innerText();
+            const chosen = (await preview(1)).slice(0, 20);
+            await page.locator("ol li > button").nth(1).click();
+
+            await releaseNextProgress(page);
+            // Pinned first: the re-ranking really happened and moved the chosen passage off its
+            // old position. Without this the selection assertion below could pass simply because
+            // nothing changed.
+            await expect.poll(async () => (await preview(2)).slice(0, 20)).toBe(chosen);
+            await expect(page.locator("ol li > button[aria-current='true']")).toContainText(chosen);
+
+            await releaseFinalLine(page);
+            await expect(page.locator("ol li > button[aria-current='true']")).toContainText(chosen);
+        });
+
+        test("follows the ranking until the reader chooses", async ({ page }) => {
+            // The other half of the rule: before the reader has picked anything, the selection is
+            // whatever currently ranks first, so the viewer keeps up with the search.
+            await installControlledStream(page, { provisional: [[0, 1, 2]], final: [2, 0, 1] });
+            await openFixture(page);
+
+            await searchMeaning(page, "解約の条件について");
+            await expect(page.locator("ol li")).toHaveCount(3);
+
+            const preview = (index: number) => page.locator("ol li span.line-clamp-4").nth(index).innerText();
+            const provisionalTop = (await preview(0)).slice(0, 20);
+
+            await releaseFinalLine(page);
+            await expect(page.getByText("may still change")).toHaveCount(0);
+
+            const finalTop = (await preview(0)).slice(0, 20);
+            expect(finalTop).not.toBe(provisionalTop);
+            await expect(page.locator("ol li > button[aria-current='true']")).toContainText(finalTop);
+        });
+
+        test("clears the provisional highlight when the search then fails", async ({ page }) => {
+            // The panel said the search could not be completed while the viewer went on
+            // highlighting a passage from a stream that never finished.
+            await openFixture(page);
+            const [target] = await firstSegmentIds(page, 1);
+
+            await page.route("**/api/search", async (route: Route) => {
+                const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string; segments: { id: string }[] };
+                const line = (message: unknown) => `${JSON.stringify(message)}\n`;
+                await route.fulfill({
+                    status: 200,
+                    headers: { "Content-Type": "application/x-ndjson" },
+                    body:
+                        line({
+                            type: "progress",
+                            documentId: body.documentId,
+                            requestId: body.requestId,
+                            evaluated: 1,
+                            total: body.segments.length,
+                            results: [{ segmentId: target, score: 1.2, relevantProbability: 0.5, confidence: 0.4 }],
+                        }) +
+                        line({
+                            type: "error",
+                            documentId: body.documentId,
+                            requestId: body.requestId,
+                            error: { code: "incomplete_evaluation", message: "Some passages were not evaluated." },
+                        }),
+                });
+            });
+
+            await searchMeaning(page, "解約の条件について");
+
+            await expect(page.getByText("The search could not be completed")).toBeVisible();
+            await expect(page.locator("ol li")).toHaveCount(0);
+            await expect(page.locator(".pdf-finder-highlight")).toHaveCount(0);
+        });
     });
 
     test("states what meaning search sends, without a dialog to dismiss", async ({ page }) => {

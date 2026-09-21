@@ -17,8 +17,15 @@ export type SearchResultsProps = {
     hasDocument: boolean;
     status: SearchStatus | null;
     results: SearchHit[];
-    selectedIndex: number;
-    onSelect: (index: number) => void;
+    /**
+     * The key of the selected result, not its position.
+     *
+     * A meaning search re-ranks its list with every batch, so position *n* can be a different
+     * passage from one frame to the next — an index would follow the position and quietly move the
+     * highlight somewhere the reader never chose.
+     */
+    selectedKey: string | null;
+    onSelect: (key: string) => void;
     errorMessage: string | null;
     locationErrorMessage: string | null;
     /**
@@ -35,7 +42,12 @@ export type SearchResultsProps = {
     unsupportedLayoutPages: number[];
     /** Which mode produced this result; an empty result means different things in each. */
     mode: SearchMode;
-    /** The query, so the parts of it that literally appear in a passage can be emphasised. */
+    /**
+     * The query these results came from, which is not necessarily the one in the search bar.
+     *
+     * Emphasising the edited text against a list produced by an earlier query annotated results
+     * with a search nobody had run.
+     */
     query: string;
     /**
      * How far a meaning search has got, or null when none is running.
@@ -123,7 +135,7 @@ export const SearchResults = ({
     hasDocument,
     status,
     results,
-    selectedIndex,
+    selectedKey,
     onSelect,
     errorMessage,
     locationErrorMessage,
@@ -135,6 +147,10 @@ export const SearchResults = ({
     progress,
 }: SearchResultsProps) => {
     if (!hasDocument) return null;
+
+    // Derived here rather than passed in: position is a property of this rendering of the list, and
+    // the list is re-ranked while a meaning search streams.
+    const selectedIndex = results.findIndex((result) => result.key === selectedKey);
 
     if (errorMessage !== null) {
         return (
@@ -254,7 +270,7 @@ export const SearchResults = ({
                         iconLeading={ArrowLeft}
                         aria-label="Previous"
                         isDisabled={selectedIndex <= 0}
-                        onClick={() => onSelect(selectedIndex - 1)}
+                        onClick={() => onSelect(results[selectedIndex - 1].key)}
                     />
                     <Button
                         size="sm"
@@ -262,7 +278,7 @@ export const SearchResults = ({
                         iconLeading={ArrowRight}
                         aria-label="Next"
                         isDisabled={selectedIndex >= results.length - 1}
-                        onClick={() => onSelect(Math.max(0, selectedIndex + 1))}
+                        onClick={() => onSelect(results[selectedIndex + 1].key)}
                     />
                 </div>
             </div>
@@ -272,7 +288,7 @@ export const SearchResults = ({
                     <li key={result.key}>
                         <button
                             type="button"
-                            onClick={() => onSelect(index)}
+                            onClick={() => onSelect(result.key)}
                             aria-current={index === selectedIndex}
                             className={cx(
                                 // Selection is carried by the tint alone, which is the same colour

@@ -88,21 +88,23 @@ The page has a top search area, a results panel on the left, and a PDF viewer on
 └────────────────────────────────────────────────────────────┘
 ```
 
-| Action                       | Behavior                                                                                                                                                                                                                                                               |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Select or drop a PDF         | Validate it, render it, and extract text from every page                                                                                                                                                                                                               |
-| Before a PDF is open         | The drop zone is the only control; the whole box opens the file picker                                                                                                                                                                                                 |
-| Drag a file over the page    | The drop zone responds from anywhere on the page, and a drop outside it is swallowed rather than opened by the browser                                                                                                                                                 |
-| Press Enter or select Search | Run the selected mode; make no API call while typing                                                                                                                                                                                                                   |
-| Select Meaning               | Send all searchable segments to the application API for Jev evaluation                                                                                                                                                                                                 |
-| Select Exact text            | Search locally; do not call Jev                                                                                                                                                                                                                                        |
-| Select a result              | Scroll the passage itself into view on its physical page; highlight the segment for a meaning result, or the matched characters for an exact one                                                                                                                       |
-| Expand a result's context    | Show the neighbouring passages that were sent with it, and open either of them. Labelled as what was sent, never as what the model used — the response does not report which context influenced the answer                                                             |
-| Select Previous or Next      | Move through existing results without another API call. The controls sit at the head of the list, beside the result count                                                                                                                                              |
-| Drag the panel divider       | Resize the results panel against the viewer; also operable from the keyboard                                                                                                                                                                                           |
-| Adjust zoom                  | The viewer opens fitted to the width of its pane; the zoom controls adjust from there and the percentage returns to fitting. A page indicator beside them names the page currently in view                                                                             |
-| Open another PDF             | Discard the previous document, request, results, and highlight                                                                                                                                                                                                         |
-| Select View extracted text   | Show segment order, IDs, pages, extracted text, the context sent with each passage, and — after a meaning search — what every segment was judged to be, including the ones no result names. Layered over the viewer, which stays mounted so the reader's place is kept |
+| Action                           | Behavior                                                                                                                                                                                                                                                               |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Select or drop a PDF             | Validate it, render it, and extract text from every page                                                                                                                                                                                                               |
+| Before a PDF is open             | The drop zone is the only control; the whole box opens the file picker                                                                                                                                                                                                 |
+| Drag a file over the page        | The drop zone responds from anywhere on the page, and a drop outside it is swallowed rather than opened by the browser                                                                                                                                                 |
+| Press Enter or select Search     | Run the selected mode; make no API call while typing                                                                                                                                                                                                                   |
+| Select Meaning                   | Send all searchable segments to the application API for Jev evaluation                                                                                                                                                                                                 |
+| Select Exact text                | Search locally; do not call Jev                                                                                                                                                                                                                                        |
+| Select a result                  | Scroll the passage itself into view on its physical page; highlight the segment for a meaning result, or the matched characters for an exact one                                                                                                                       |
+| Expand a result's context        | Show the neighbouring passages that were sent with it, and open either of them. Labelled as what was sent, never as what the model used — the response does not report which context influenced the answer                                                             |
+| Select Previous or Next          | Move through existing results without another API call. The controls sit at the head of the list, beside the result count                                                                                                                                              |
+| Edit the query without searching | Keep the results already on screen, still described by the query that produced them — never re-annotated against text nobody searched for                                                                                                                              |
+| Select a passage mid-search      | Keep that passage selected as later batches re-rank the list, and when the final ranking arrives                                                                                                                                                                       |
+| Drag the panel divider           | Resize the results panel against the viewer; also operable from the keyboard                                                                                                                                                                                           |
+| Adjust zoom                      | The viewer opens fitted to the width of its pane; the zoom controls adjust from there and the percentage returns to fitting. A page indicator beside them names the page currently in view                                                                             |
+| Open another PDF                 | Discard the previous document, request, results, and highlight                                                                                                                                                                                                         |
+| Select View extracted text       | Show segment order, IDs, pages, extracted text, the context sent with each passage, and — after a meaning search — what every segment was judged to be, including the ones no result names. Layered over the viewer, which stays mounted so the reader's place is kept |
 
 Each result shows the physical page number and original extracted text. “Page 3” means the third page in the file, regardless of printed page numbers. Do not show generated explanations.
 
@@ -436,7 +438,7 @@ The provider budget lives in one Durable Object holding counters and expiring re
 | Page count above the limit        | Reject before reading any page's text; nothing is rendered                           |
 | More text than extraction reads   | Stop extracting, keep the document readable, and say the extracted text is partial   |
 | A slow document is being opened   | Offer to cancel; cancelling stops the work rather than hiding it                     |
-| Jev is unavailable                | Retry within the deadline, then show a search error                                  |
+| Jev is unavailable                | Retry within the deadline, then show a search error, and clear the provisional list  |
 | Too many searches from a client   | Refuse with the wait, and do not retry automatically                                 |
 | Provider capacity is committed    | Refuse with the wait, before any provider call is made                               |
 | Highlight mapping is unavailable  | Keep the result and report the display failure                                       |
@@ -1256,3 +1258,30 @@ passed, so a superseded load ran to completion and was thrown away; and a failur
 PDF.js loading task alive with nobody to release it. Both are fixed, the document generation is
 claimed before the first `await` rather than after it, and a slow import can be cancelled instead of
 waited out.
+
+### 14.24 Results belong to the search that produced them
+
+Three things the display state got wrong, all reproduced before they were fixed.
+
+**The panel described old results with the current query.** Editing the search box left the previous
+results on screen — which is fine, there is nothing wrong with still seeing what you last searched
+for — but the panel was handed the _edited_ text, so it re-emphasised those passages against a
+search nobody had run, and switching mode relabelled them. The query and mode that produced a
+result set now travel with it.
+
+**Selection was a position.** A meaning search re-ranks its list with every batch, so position _n_
+is a different passage from one frame to the next; the viewer followed the position and highlighted
+somewhere the reader had not chosen. And the final response reset the selection to the top, undoing
+a choice made while the search was still running — directly contradicting the comment sitting above
+it. Selection is now the result's key, it follows the ranking until the reader picks something, and
+after that it stays on their passage for as long as the passage is in the list.
+
+**A failed search kept its provisional highlight.** The panel said the search could not be completed
+while the viewer went on highlighting a passage from a stream that never finished — offering the
+reader a result nothing stands behind. A terminal failure now clears the list, the selection and the
+judgements.
+
+Testing the middle one needed a response the test could release in instalments, which
+`route.fulfill` cannot do: `tests/controlled-stream.ts` replaces `fetch` inside the page so the
+application's own client consumes a stream the test drives. It is also what lets the quality
+harness's "is it finished" rule be checked against the real panel.
