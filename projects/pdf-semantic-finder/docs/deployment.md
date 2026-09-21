@@ -197,7 +197,24 @@ This is an honest list, not a disclaimer. Each of these is a real gap in a publi
   against this deployment. The batch state is labelled untrusted in every question, which reduces
   the surface without establishing that ranking cannot be manipulated.
 
-## 9. Before announcing it widely
+## 9. Deployability, checked
+
+Run against the current tree on 2026-09-21. All of it is reproducible with `npx wrangler deploy --dry-run`.
+
+| Check                                              | Result                                                                    |
+| -------------------------------------------------- | ------------------------------------------------------------------------- |
+| Worker bundle                                      | 47 KiB, 16 KiB gzipped — far inside the limit                             |
+| Node built-ins in the bundle                       | none, so no `nodejs_compat` flag needed                                   |
+| Static assets                                      | 208 files, largest 1.26 MB (the PDF.js worker)                            |
+| `compatibility_date`                               | 2026-09-20, not in the future                                             |
+| Bindings resolved                                  | `SEARCH_BUDGET`, `SEARCH_RATE_LIMIT`, `ASSETS`                            |
+| Durable Object class exported from the entry point | yes                                                                       |
+| Secrets in the upload                              | none; `.dev.vars` sits outside the asset root and outside the entry point |
+
+Nothing here blocks a deploy. What remains is the account-side work in §2 and the verification in
+§5, neither of which a dry run can do.
+
+## 10. Before announcing it widely
 
 The gates above are for a deployment that exists. Before pointing a large audience at it:
 

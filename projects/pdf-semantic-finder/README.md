@@ -198,6 +198,37 @@ The §11.1 evaluation set is `tests/evaluation-cases.json`: 32 queries over two 
 anything, and `bitcoin.pdf`, with eighteen queries written by an outside reviewer. Both are
 present. See `tests/fixtures/README.md` for what each file is for.
 
+## Publishing this source
+
+`package.json` carries `"private": true` and the repository has no `LICENSE`, so as it stands it is
+not published and grants nobody any rights. Before that changes, two things need settling.
+
+**Untitled UI's licence forbids publishing its source.** `src/components/base/` and
+`src/components/application/` hold 22 component files taken from Untitled UI React, and `UNTITLED.md`
+is Untitled UI's own documentation embedded verbatim. Their licence says a licensee may not
+
+> Expose raw Untitled UI React source code in any product, including open-source repositories,
+> downloadable assets, or browser-accessible code.
+
+and that this applies to the free and paid tiers alike, with an exception only for components their
+documentation explicitly marks MIT. **This blocks publishing the repository as it stands**, and the
+options are to confirm those particular components are among the MIT-marked ones, to replace them,
+or to publish without them. The npm packages `@untitledui/icons` and `@untitledui/file-icons` are
+MIT and are not affected — the problem is vendored source, not the dependencies.
+
+**Vendored agent skills.** `.agents/` and `.claude/skills/` hold about a hundred files of
+third-party rules and guidance, one set with its own `LICENSE.txt`. They are working material, not
+part of the product, and the simplest answer is to leave them out of anything published.
+
+Lower risk but worth a decision: `assets/bitcoin.pdf` is the Bitcoin whitepaper, which is routinely
+redistributed and ships inside Bitcoin Core under MIT.
+
+**No credentials are committed.** Verified across every blob in the history, not just the working
+tree: the real key in `.dev.vars` appears in no commit, `.dev.vars` is gitignored, and a sweep for
+AWS keys, private-key blocks, bearer tokens and assigned secrets found nothing outside lockfiles and
+fixtures. `.dev.vars.example` holds an empty value. Re-run that check before publishing rather than
+trusting this paragraph.
+
 ## How it works
 
 [docs/how-search-works.md](docs/how-search-works.md) walks through the implemented mechanism with
