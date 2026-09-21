@@ -10,6 +10,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LIMITS } from "@/lib/types";
+import { stubChallenge } from "./stub-challenge";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BLANK_PAGE = resolve(here, "fixtures/sample-blank-page-ja.pdf");
@@ -25,6 +26,10 @@ const ALL = [BLANK_PAGE, OVER_LIMIT, ENCRYPTED, NO_TEXT, TWO_COLUMN, TOO_MANY_PA
 test("the limit fixtures are present", () => {
     const missing = ALL.filter((path) => !existsSync(path));
     expect(missing, `Run \`npm run fixtures:sample\`. Missing: ${missing.join(", ")}`).toEqual([]);
+});
+
+test.beforeEach(async ({ page }) => {
+    await stubChallenge(page);
 });
 
 test.describe("declared limits", () => {

@@ -403,6 +403,12 @@ Do not send the PDF binary, page number, filename, or browser display references
 
 ### 9.3 Validation and concurrency
 
+Admission runs before any of this, cheapest first: method, same origin, per-client rate limit, bounded body read, validation, **Turnstile**, provider budget. The human-presence gate sits after validation rather than before the body because the body read is already bounded and cheap while the gate costs a round trip to Cloudflare — a malformed request should not spend one, and should be told what was actually wrong with it. It is in front of the budget reservation and in front of every provider call, which is what it is for. Its token travels as a `CF-Turnstile-Response` header, which cannot be sent cross-origin without a preflight this Worker never grants.
+
+Turnstile is not authentication and does not make the endpoint private: a real browser can be driven, and tokens can be farmed. It raises the cost of the casual scripted case. The rate limit and the provider budget remain the controls that bound spend.
+
+An unconfigured or unreachable gate fails open and logs `admission_unavailable`, like the other two gates, so that a unit test, a `wrangler dev` without the secret, and an outage at Cloudflare do not become an outage of the product. The cost of that choice is the one already recorded for the rate limit: a misconfigured deployment silently has no gate.
+
 The Worker validates:
 
 - a nonempty query of at most 200 characters;
@@ -1647,3 +1653,50 @@ when there is no known-good deployment to compare against.
 
 `playwright.config.ts` now retries once when `CI` is set. That covers exactly one documented race —
 both web servers starting while the build runs — and nothing else. A failure that repeats is real.
+
+### 14.35 A human-presence gate in front of the endpoint
+
+`/api/search` was reachable by anything that could make an HTTP request. Measured against the
+deployment: with no `Origin` and no `Sec-Fetch-Site`, `curl` got a 200 and a real ranked result.
+The same-origin check of §9.1 does what its own comment says it does — it bounds abuse through a
+visitor's browser, not abuse in general — and the rate limit that was supposed to bound the rest
+admitted 87 requests from one address inside two minutes, which is consistent with Cloudflare's own
+description of the binding as "permissive, eventually consistent, and intentionally designed to not
+be used as an accurate accounting system".
+
+So a Cloudflare Turnstile token is now required. What it changes, precisely: calling this endpoint
+from a script now costs a challenge per request instead of nothing. What it does not change: it is
+not authentication, the endpoint is not private, and a driven browser still clears it. The gate that
+bounds spend is still the provider budget, and the thing that would actually cap a bill is still the
+provider account's balance (§14.30 and `docs/deployment.md` §10).
+
+**Where it sits.** After validation, before the budget reservation. The first draft put it ahead of
+the body read, on the reasoning that an unverified caller should not make the Worker buffer four
+megabytes. Two things say otherwise: the body read is already bounded and cheap, which is what
+`worker/http/read-body.ts` exists for, while the gate costs a round trip to Cloudflare — and
+placing it first meant a request with the wrong content type was answered "not verified" rather
+than what was wrong with it. `tests/api-hardening.spec.ts` pins both halves: the structural
+refusals keep their own codes, and a valid search with no token is refused with `challenge_failed`.
+
+**Where the sitekey comes from.** `/api/config`, at runtime, rather than inlined by Vite at build
+time. The variable is named `VITE_TURNSTILE_SITEKEY` because that is what it is called wherever it
+is configured, but it lives in `.dev.vars` and in the deployment's variables, neither of which Vite
+reads. Serving it also means rotating the widget needs no rebuild. The client asks for it **only
+when a meaning search is about to run**, so opening a PDF and searching it exactly still make no
+request at all — the property §14.30's cost model rests on, and `tests/headers.spec.ts` asserts that
+`challenges.cloudflare.com` is absent from a plain page load.
+
+**A fresh token per search.** A Turnstile token is valid for five minutes and once; a replay comes
+back as `timeout-or-duplicate`. A widget is therefore rendered, executed and removed per search
+rather than held and reset, which keeps the client out of the reset lifecycle.
+
+**What the policy had to admit.** `script-src` and `frame-src` now name
+`https://challenges.cloudflare.com`, in `worker/http/security-headers.ts` and `public/_headers`
+both. `frame-src` has to be explicit: absent, it falls back to `default-src 'self'` and the widget
+is blocked. `connect-src 'self'` is untouched, so the check it doubles as — the browser never
+contacts the provider — still holds.
+
+**What the browser tests give up.** The specs that exercise meaning search answer `/api/config` with
+no sitekey, so the client skips the challenge and the suite stays local. That means the widget path
+itself is covered by nothing automated. `tests/turnstile.test.ts` covers the decision that admits a
+search; only a deployed check covers the widget.

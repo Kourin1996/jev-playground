@@ -42,6 +42,11 @@ test.describe("deployed response headers", () => {
         expect(csp).toContain("base-uri 'none'");
         expect(csp).toContain("'wasm-unsafe-eval'");
         expect(csp).toContain("worker-src 'self' blob:");
+        // Turnstile (spec §9.3) loads its script from this host and runs the widget in an iframe
+        // from it. `frame-src` must be named: without it the directive falls back to
+        // `default-src 'self'` and the widget is blocked.
+        expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com");
+        expect(csp).toContain("frame-src https://challenges.cloudflare.com");
         // The browser never contacts the provider; the Worker does. A provider host appearing here
         // would mean something had moved to the wrong side of the architecture boundary.
         expect(csp).toContain("connect-src 'self'");
@@ -115,6 +120,10 @@ test.describe("deployed response headers", () => {
         await page.goto("/");
         await page.waitForLoadState("networkidle");
 
+        // Turnstile is absent from this list on purpose: `challenges.cloudflare.com` is contacted
+        // only when a meaning search runs, and nothing on this page load does. That it stays
+        // absent is the assertion — a widget loaded at start-up would make opening a PDF cost a
+        // third-party request, which §14.30's cost model says it does not.
         expect([...hosts].sort()).toEqual(["fonts.googleapis.com", "fonts.gstatic.com"]);
     });
 });

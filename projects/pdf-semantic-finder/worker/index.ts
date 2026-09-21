@@ -8,6 +8,7 @@
 import type { SearchErrorCode, SearchErrorResponse, SearchStreamMessage } from "@/lib/types";
 import { LIMITS } from "@/lib/types";
 import { estimateSearchInputTokens } from "./admission/estimate-tokens";
+import { verifyChallengeToken } from "./admission/turnstile";
 import { readBoundedJson } from "./http/read-body";
 import { isSameOriginRequest } from "./http/same-origin";
 import { withSecurityHeaders } from "./http/security-headers";
@@ -26,6 +27,17 @@ export { SearchBudget } from "./admission/search-budget";
 type WorkerEnv = Env & {
     TYPESAFE_API_KEY: string;
     TYPESAFE_MODEL?: string;
+    /** Turnstile's secret half. Never leaves this Worker, and never reaches a log line. */
+    TURNSTILE_SECRET?: string;
+    /**
+     * Turnstile's public half, handed to the browser by `/api/config`.
+     *
+     * Named with Vite's prefix because that is what it is called wherever it is configured, but it
+     * is **not** inlined at build time: it lives in `.dev.vars` and in the deployment's variables,
+     * neither of which Vite reads. Serving it at runtime also means rotating the widget does not
+     * need a rebuild.
+     */
+    VITE_TURNSTILE_SITEKEY?: string;
 };
 
 /**
@@ -57,6 +69,7 @@ const ERROR_MESSAGES: Record<SearchErrorCode, string> = {
     segment_text_too_long: `A segment may be at most ${LIMITS.maxSegmentCharacters} characters.`,
     extracted_text_too_long: `This document exceeds the ${LIMITS.maxExtractedCharacters.toLocaleString("en-US")}-character limit.`,
     request_body_too_large: "The search request was too large.",
+    challenge_failed: "This search could not be verified as coming from a browser. Reload the page and try again.",
     rate_limited: "Too many searches from this connection. Wait a few seconds and try again.",
     capacity_exhausted: "The search service is busy. Try again in a moment.",
     provider_unavailable: "The search could not be completed.",
@@ -68,6 +81,7 @@ const ERROR_MESSAGES: Record<SearchErrorCode, string> = {
 
 const STATUS_CODES: Partial<Record<SearchErrorCode, number>> = {
     request_body_too_large: 413,
+    challenge_failed: 403,
     rate_limited: 429,
     capacity_exhausted: 503,
     provider_unavailable: 502,
@@ -154,6 +168,42 @@ const handleSearch = async (request: Request, env: WorkerEnv): Promise<Response>
     if (!validated.ok) return errorResponse(validated.error.code);
 
     const { documentId, requestId, query, segments } = validated.value;
+
+    /*
+     * The human-presence gate (spec §9.3), after validation rather than before the body.
+     *
+     * The first draft put it ahead of the body read, reasoning that an unverified caller should
+     * not make this Worker buffer four megabytes. Two things say otherwise. The body read is
+     * already bounded and cheap — that is what `read-body.ts` exists for — while this gate costs a
+     * round trip to Cloudflare, so a malformed request should not spend one. And placing it first
+     * meant a request with the wrong content type was answered "not verified" instead of what was
+     * actually wrong with it, which is worse for anyone holding it.
+     *
+     * What still holds is the part that matters: it is in front of the budget reservation and in
+     * front of every provider call. What is given up is that an unverified caller can still make
+     * this Worker read a bounded body; the rate limit is what stands in front of that.
+     *
+     * The token travels as a header, which cannot be sent cross-origin without a preflight this
+     * Worker never grants, and which keeps it out of the validated request shape.
+     *
+     * `unavailable` fails open and says so, like the other two gates: a unit test and a
+     * `wrangler dev` without the secret must still be able to run a search, and an outage of
+     * Turnstile must not become an outage of the product. The cost of that choice is the one
+     * README.md already records for the rate limit — a misconfigured deployment silently has no
+     * gate — and the deployment checklist is what catches it.
+     */
+    const challenge = await verifyChallengeToken(request.headers.get("CF-Turnstile-Response"), env.TURNSTILE_SECRET, {
+        idempotencyKey: crypto.randomUUID(),
+        signal: request.signal,
+    });
+    if (!challenge.ok) {
+        if (challenge.reason === "unavailable") {
+            console.warn(JSON.stringify({ event: "admission_unavailable", gate: "challenge" }));
+        } else {
+            console.warn(JSON.stringify({ event: "admission_refused", gate: "challenge", reason: challenge.reason }));
+            return errorResponse("challenge_failed");
+        }
+    }
 
     if (env.TYPESAFE_API_KEY === undefined || env.TYPESAFE_API_KEY === "") {
         console.error(JSON.stringify({ event: "search_failed", code: "internal_error", reason: "missing_credentials" }));
@@ -330,6 +380,19 @@ export default {
                 );
                 return errorResponse("internal_error");
             }
+        }
+
+        /*
+         * The public half of the Turnstile widget.
+         *
+         * Fetched lazily by the client, only when a meaning search is about to run, so that
+         * opening and exact-searching a PDF still makes no request at all — the property §14.30's
+         * cost model rests on. `null` means no widget is configured, and the client then skips the
+         * challenge; the Worker is where that decision actually binds.
+         */
+        if (url.pathname === "/api/config") {
+            if (request.method !== "GET") return new Response("Method Not Allowed", { status: 405, headers: apiHeaders });
+            return Response.json({ turnstileSitekey: env.VITE_TURNSTILE_SITEKEY ?? null }, { headers: apiHeaders });
         }
 
         if (url.pathname.startsWith("/api/")) return new Response("Not Found", { status: 404, headers: apiHeaders });

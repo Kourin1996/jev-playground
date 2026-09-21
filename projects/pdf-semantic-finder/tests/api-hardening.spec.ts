@@ -75,6 +75,32 @@ test.describe("/api/search admission", () => {
         expect(notFound.headers()["cache-control"]).toBe("no-store");
     });
 
+    test("refuses a valid search that carries no challenge token, when the gate is configured", async ({ request, baseURL }) => {
+        /*
+         * Proves the wiring rather than the decision: the header name, the status, and that the
+         * gate sits in front of the provider. `tests/turnstile.test.ts` covers what the decision
+         * itself is.
+         *
+         * Conditional because the gate is configured by `.dev.vars`, which is not in the
+         * repository — with no `TURNSTILE_SECRET` the Worker logs `admission_unavailable` and
+         * admits the search, and that is the documented behaviour rather than a failure. A run
+         * that skips this is a run that did not test it, which is why it says so.
+         */
+        const config = await request.get(`${baseURL}/api/config`);
+        expect(config.status()).toBe(200);
+
+        const response = await request.post(`${baseURL}/api/search`, {
+            headers: { "Content-Type": "application/json" },
+            data: JSON.stringify(body()),
+        });
+
+        test.skip(response.status() !== 403, "TURNSTILE_SECRET is not configured in this environment; the gate fails open by design");
+
+        expect((await response.json()).error.code).toBe("challenge_failed");
+        // Nothing cross-origin may read this, refusal included.
+        expect(response.headers()["access-control-allow-origin"]).toBeUndefined();
+    });
+
     test("a rejected request never reaches the provider", async ({ page, baseURL }) => {
         // Through a page rather than the API context, so the route interception is real.
         let called = false;

@@ -11,6 +11,7 @@ import type { Page, Route } from "@playwright/test";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stubChallenge } from "./stub-challenge";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(here, "fixtures/bitcoin.pdf");
@@ -20,6 +21,10 @@ const PAGE_COUNT = 9;
 
 test("the Bitcoin whitepaper fixture is present", () => {
     expect(existsSync(FIXTURE), `Fixture PDF missing: ${FIXTURE}`).toBe(true);
+});
+
+test.beforeEach(async ({ page }) => {
+    await stubChallenge(page);
 });
 
 test.describe("real-world English document", () => {

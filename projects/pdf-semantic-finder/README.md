@@ -191,9 +191,19 @@ use `wrangler secret put` for a deployment. `.dev.vars` is gitignored; never com
 ```env
 TYPESAFE_API_KEY=...
 TYPESAFE_MODEL=jev-1.13.0
+TURNSTILE_SECRET=...
+VITE_TURNSTILE_SITEKEY=...
 ```
 
 The model is pinned so evaluation runs are reproducible. Do not point it at a moving `latest` alias.
+
+The two Turnstile values are the human-presence gate in front of `/api/search` (spec §9.3). Both
+belong here rather than in a `.env` file: the sitekey is public, but it is served to the browser by
+`/api/config` at runtime rather than inlined by Vite at build time, so rotating the widget needs no
+rebuild. For local development and the browser suite, prefer Cloudflare's dummy keys —
+`1x00000000000000000000BB` and `1x0000000000000000000000000000000AA` — which always pass and need
+no interaction. Leaving both empty disables the gate, which the Worker logs as
+`admission_unavailable` rather than failing.
 
 ### PDF.js runtime assets
 

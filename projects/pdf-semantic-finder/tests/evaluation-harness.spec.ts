@@ -15,9 +15,14 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { hasSettled } from "./evaluation-state";
+import { stubChallenge } from "./stub-challenge";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(here, "fixtures/sample-contract-ja.pdf");
+
+test.beforeEach(async ({ page }) => {
+    await stubChallenge(page);
+});
 
 test.describe("the harness waits for a committed verdict", () => {
     test.skip(() => !existsSync(FIXTURE), "run `npm run fixtures:sample` first");

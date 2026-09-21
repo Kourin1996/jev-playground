@@ -63,10 +63,22 @@ export const requestSemanticSearch = async (
     request: SearchRequest,
     signal: AbortSignal,
     onProgress?: (progress: SemanticSearchProgress) => void,
+    /*
+     * The Turnstile token, when one was obtained (spec §9.3).
+     *
+     * A header rather than a field of the body: it cannot be sent cross-origin without a preflight
+     * the Worker never grants, and it stays out of the request shape `validate.ts` checks. Null is
+     * sent as no header at all, and the Worker decides what that means — the gate lives there, not
+     * here.
+     */
+    challengeToken?: string | null,
 ): Promise<SemanticSearchOutcome> => {
     const response = await fetch("/api/search", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+            "Content-Type": "application/json",
+            ...(challengeToken === undefined || challengeToken === null ? {} : { "CF-Turnstile-Response": challengeToken }),
+        },
         body: JSON.stringify(request),
         signal,
     });

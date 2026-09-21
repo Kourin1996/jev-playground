@@ -30,13 +30,18 @@
  *   PDF.js's CMaps, WASM, ICC profiles and standard fonts under `/pdfjs/`. **The browser never
  *   contacts the provider**; the Worker does. That absence is itself a check on the architecture
  *   boundary — if this ever needs a provider host, something has moved to the wrong side.
+ * - `script-src`/`frame-src https://challenges.cloudflare.com` — Turnstile (spec §9.3). It loads
+ *   its script from that host and runs the widget in an iframe from it, and `frame-src` has to be
+ *   named explicitly because it would otherwise fall back to `default-src 'self'`. `connect-src`
+ *   is untouched: the widget talks to its own frame, not to the page, so the boundary the
+ *   `connect-src 'self'` note below describes still holds.
  * - `form-action 'none'` — the search form never navigates; it is submitted through JavaScript and
  *   prevented. If the script fails, the fallback navigation is blocked rather than leaking the
  *   query into a URL.
  */
 
 const CONTENT_SECURITY_POLICY =
-    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' blob: data:; connect-src 'self'; frame-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /** Set on every response, and safe on every response: none of them can break a working page. */
 const SECURITY_HEADERS = {

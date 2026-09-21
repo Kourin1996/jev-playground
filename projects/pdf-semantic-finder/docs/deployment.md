@@ -63,7 +63,13 @@ the cause. A real failure repeats.
 ```bash
 npx wrangler secret put TYPESAFE_API_KEY
 npx wrangler secret put TYPESAFE_MODEL     # only if pinning something other than the default
+npx wrangler secret put TURNSTILE_SECRET   # the human-presence gate (spec §9.3)
 ```
+
+`VITE_TURNSTILE_SITEKEY` is the public half and goes in the deployment's **variables**, not its
+secrets. The Worker hands it to the browser at `/api/config`; Vite never sees it, so changing the
+widget needs no rebuild. With no secret set the gate fails open and logs `admission_unavailable` —
+the same hazard as a missing rate-limit binding, and checked the same way in §5.2.
 
 `.dev.vars` is for local development and is gitignored. It is **not** uploaded: `wrangler deploy`
 sends the Worker entry point and the contents of `dist/client`, and `.dev.vars` sits in
@@ -142,6 +148,17 @@ If it does not refuse, the binding is missing and the endpoint is unmetered. The
 
 Note that the limit is evaluated per Cloudflare location, so it bounds one client rather than the
 account, and testing it from one place is the only meaningful test of it.
+
+**The human-presence gate.** Post a valid search to `/api/search` with `curl` and no
+`CF-Turnstile-Response` header. It should answer `403` with `challenge_failed`. If it answers `200`,
+the secret is missing and the endpoint is reachable by anything that can make an HTTP request —
+confirm with `npx wrangler tail`, which logs `{"event":"admission_unavailable","gate":"challenge"}`
+in that case. Then open the site and run a meaning search in a browser, which is the only place the
+widget itself is exercised: nothing in the automated suite loads it.
+
+Remember what this does and does not do. It raises the cost of scripted calls. It is not
+authentication, a driven browser clears it, and the only hard cap on spend remains the provider
+account's balance (§10).
 
 **Provider budget.** The Durable Object refuses a search when the account-wide token budget is
 committed. Confirm `{"event":"admission_unavailable","gate":"provider_budget"}` does **not** appear

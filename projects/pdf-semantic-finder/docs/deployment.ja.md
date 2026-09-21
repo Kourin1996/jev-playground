@@ -62,7 +62,13 @@ npm run verify            # assets + typecheck + 単体テスト + E2E
 ```bash
 npx wrangler secret put TYPESAFE_API_KEY
 npx wrangler secret put TYPESAFE_MODEL     # 既定以外のモデルを固定する場合のみ
+npx wrangler secret put TURNSTILE_SECRET   # 人間性チェック(仕様書 §9.3)
 ```
+
+`VITE_TURNSTILE_SITEKEY` は公開側の値なので、secret ではなくデプロイの**変数**に置きます。Worker が
+`/api/config` でブラウザに渡すため Vite は関与せず、ウィジェットの差し替えに再ビルドは不要です。
+secret が未設定の場合、ゲートは fail open して `admission_unavailable` をログに出します — rate limit
+binding が欠けている場合と同じ危険であり、確認方法も §5.2 と同じです。
 
 `.dev.vars` はローカル開発用で gitignore 対象です。**アップロードはされません**。`wrangler deploy` が
 送るのは Worker のエントリポイントと `dist/client` の中身で、`.dev.vars` はビルドされた Worker の隣の
@@ -141,6 +147,17 @@ Chrome・Firefox・Safari の3つで実施してください。自動テスト�
 
 この制限は Cloudflare のロケーション単位で評価されるため、アカウントではなく1クライアントを縛るものです。
 1箇所から試すことだけが、この制限の意味のある試験になります。
+
+**人間性チェック。** `CF-Turnstile-Response` ヘッダを付けずに、正当な検索リクエストを `curl` で
+`/api/search` に送ってください。`403` と `challenge_failed` が返るはずです。`200` が返る場合は secret
+が未設定で、HTTPリクエストを送れるものなら何でもこのエンドポイントに到達できます。`npx wrangler tail`
+で `{"event":"admission_unavailable","gate":"challenge"}` が出ていることを確認してください。そのうえで
+ブラウザで意味検索を実行してください。**ウィジェット自体が動くのはここだけです** — 自動テストは
+どれもウィジェットを読み込みません。
+
+この仕組みができること・できないことを忘れないでください。スクリプトからの呼び出しのコストは上げます。
+認証ではなく、実ブラウザを自動操作されれば通過され、支出の確実な上限は依然としてプロバイダ側の残高
+だけです(§10)。
 
 **プロバイダ予算。** アカウント全体のトークン予算が埋まると Durable Object が検索を拒否します。
 `{"event":"admission_unavailable","gate":"provider_budget"}` がログに**出ていない**ことを確認して

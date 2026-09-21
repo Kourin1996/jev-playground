@@ -22,6 +22,7 @@ import { PageCountExceededError, extractPdfText } from "@/lib/pdf/extract-text";
 import type { HighlightTargetFailure } from "@/lib/pdf/highlight";
 import { buildPageIndexes } from "@/lib/pdf/page-index";
 import type { PageIndex } from "@/lib/pdf/page-index";
+import { obtainChallengeToken } from "@/lib/search/challenge";
 import { exactSearch } from "@/lib/search/exact-search";
 import { buildSearchRequest, requestSemanticSearch } from "@/lib/search/semantic-search";
 import type { PdfSegment } from "@/lib/types";
@@ -74,6 +75,7 @@ type LoadedDocument = {
 };
 
 const ERROR_TEXT: Partial<Record<SearchErrorCode, string>> = {
+    challenge_failed: "This search was not verified as coming from a browser. Reload the page and try again.",
     provider_unavailable: "The evaluation service did not respond successfully.",
     provider_timeout: "The evaluation service did not respond in time.",
     provider_malformed_response: "The evaluation service returned an unusable response.",
@@ -371,21 +373,32 @@ export const PdfWorkspace = () => {
                     }));
 
             try {
-                const outcome = await requestSemanticSearch(buildSearchRequest(documentId, requestId, query, loaded.segments), controller.signal, (update) => {
-                    // Guarded like the final response: a partial result from a superseded
-                    // search must not reach the screen either.
-                    if (currentDocumentIdRef.current !== documentId || currentRequestIdRef.current !== requestId) return;
+                // A fresh token per search: a Turnstile token is valid once, and for five
+                // minutes. Null when the widget is not configured or did not answer — the Worker
+                // decides what that means, and a failure here must not decide it instead.
+                const challengeToken = await obtainChallengeToken(controller.signal);
+                if (currentDocumentIdRef.current !== documentId || currentRequestIdRef.current !== requestId) return;
 
-                    setProgress({ evaluated: update.evaluated, total: update.total });
-                    const next = toHits(update.results);
-                    setResults(next);
-                    // Follows the ranking until the reader picks a passage, then stays where they
-                    // put it — and it is a key, so re-ranking cannot silently move it elsewhere.
-                    setSelectedKey((current) => {
-                        if (hasChosenResultRef.current && current !== null && next.some((hit) => hit.key === current)) return current;
-                        return next[0]?.key ?? current;
-                    });
-                });
+                const outcome = await requestSemanticSearch(
+                    buildSearchRequest(documentId, requestId, query, loaded.segments),
+                    controller.signal,
+                    (update) => {
+                        // Guarded like the final response: a partial result from a superseded
+                        // search must not reach the screen either.
+                        if (currentDocumentIdRef.current !== documentId || currentRequestIdRef.current !== requestId) return;
+
+                        setProgress({ evaluated: update.evaluated, total: update.total });
+                        const next = toHits(update.results);
+                        setResults(next);
+                        // Follows the ranking until the reader picks a passage, then stays where they
+                        // put it — and it is a key, so re-ranking cannot silently move it elsewhere.
+                        setSelectedKey((current) => {
+                            if (hasChosenResultRef.current && current !== null && next.some((hit) => hit.key === current)) return current;
+                            return next[0]?.key ?? current;
+                        });
+                    },
+                    challengeToken,
+                );
 
                 if (controller.signal.aborted) return;
                 if (currentDocumentIdRef.current !== documentId) return;

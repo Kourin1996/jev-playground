@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { installControlledStream, releaseFinalLine, releaseNextProgress } from "./controlled-stream";
+import { stubChallenge } from "./stub-challenge";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -77,6 +78,10 @@ test.describe("appearance", () => {
         expect(dark.colorScheme).toBe("light");
         expect(dark.body).toBe("rgb(255, 255, 255)");
     });
+});
+
+test.beforeEach(async ({ page }) => {
+    await stubChallenge(page);
 });
 
 test.describe("viewer", () => {

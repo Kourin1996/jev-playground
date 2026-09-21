@@ -12,6 +12,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LIMITS } from "../src/lib/types";
+import { stubChallenge } from "./stub-challenge";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(here, "../assets/bitcoin.pdf");
@@ -28,6 +29,10 @@ const SEGMENT_COUNT = 86;
 
 test("the Bitcoin whitepaper asset is present", () => {
     expect(existsSync(FIXTURE), `Missing: ${FIXTURE}`).toBe(true);
+});
+
+test.beforeEach(async ({ page }) => {
+    await stubChallenge(page);
 });
 
 test.describe("assets/bitcoin.pdf", () => {

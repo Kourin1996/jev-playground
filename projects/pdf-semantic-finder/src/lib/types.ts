@@ -423,6 +423,7 @@ export type SearchErrorCode =
     | "segment_text_too_long"
     | "extracted_text_too_long"
     | "request_body_too_large"
+    | "challenge_failed"
     | "rate_limited"
     | "capacity_exhausted"
     | "provider_unavailable"
@@ -451,6 +452,7 @@ export const SEARCH_ERROR_CODES: readonly SearchErrorCode[] = [
     "segment_text_too_long",
     "extracted_text_too_long",
     "request_body_too_large",
+    "challenge_failed",
     "rate_limited",
     "capacity_exhausted",
     "provider_unavailable",

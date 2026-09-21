@@ -2,3 +2,14 @@
 # The model is pinned for reproducible evaluation; do not use a moving `latest` alias.
 TYPESAFE_API_KEY=
 TYPESAFE_MODEL=jev-1.13.0
+
+# Cloudflare Turnstile (spec §9.3). Both halves live here rather than in a .env file: the sitekey
+# is served to the browser by `/api/config` at runtime, not inlined by Vite at build time.
+#
+# For local development and the end-to-end suite, prefer Cloudflare's documented dummy keys over
+# the real widget — they need no interaction and make the gate deterministic:
+#   VITE_TURNSTILE_SITEKEY=1x00000000000000000000BB   (always passes, invisible)
+#   TURNSTILE_SECRET=1x0000000000000000000000000000000AA   (always passes validation)
+# Leaving both empty disables the gate and logs `admission_unavailable`.
+TURNSTILE_SECRET=
+VITE_TURNSTILE_SITEKEY=
