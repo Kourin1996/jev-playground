@@ -629,6 +629,12 @@ export const PdfWorkspace = () => {
                     <div className="flex min-w-0 items-baseline gap-3">
                         <h1 className="shrink-0 text-lg font-semibold tracking-tight text-primary">PDF Semantic Finder</h1>
                         {/*
+                         * Quieter than the title and quieter than the filename, because it is the
+                         * one thing here the reader never needs: it says who made this, not what
+                         * they are working on.
+                         */}
+                        <p className="shrink-0 text-sm text-quaternary">by kourin</p>
+                        {/*
                          * Which document is open belongs beside the title, not in the status bar
                          * at the foot of the screen with the timings — one is what the reader is
                          * working on, the others are how the machine got on.
@@ -639,14 +645,35 @@ export const PdfWorkspace = () => {
                             </p>
                         )}
                     </div>
-                    {/*
-                     * Open PDF appears only once a document is open. Before that the drop zone is
-                     * the single affordance on the screen, and a second way to do the same thing
-                     * beside an empty page is noise.
-                     */}
-                    {loaded !== null && (
-                        <div className="flex shrink-0 items-center gap-2">
-                            {/* The input is visually hidden but still focusable, so the ring is drawn on the label. */}
+                    <div className="flex shrink-0 items-center gap-2">
+                        {/*
+                         * The source, which is the one control here that does not depend on a
+                         * document being open — so it lives outside the block below and is
+                         * reachable from the empty state too.
+                         *
+                         * GitHub's mark is inline rather than an icon import: `@untitledui/icons`
+                         * carries no brand marks, and a generic code glyph would not say where the
+                         * link goes. It is a link, not a loaded image, so the policy is unchanged.
+                         */}
+                        <a
+                            href="https://github.com/Kourin1996/jev-playground"
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            aria-label="Source code on GitHub"
+                            className="inline-flex rounded-lg p-2 text-quaternary outline-brand transition duration-100 ease-linear hover:text-secondary focus-visible:outline-2 focus-visible:outline-offset-2"
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" className="size-5 fill-current">
+                                <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+                            </svg>
+                        </a>
+
+                        {/*
+                         * Open PDF appears only once a document is open. Before that the drop zone
+                         * is the single affordance on the screen, and a second way to do the same
+                         * thing beside an empty page is noise.
+                         */}
+                        {/* The input is visually hidden but still focusable, so the ring is drawn on the label. */}
+                        {loaded !== null && (
                             <label className="inline-flex rounded-lg outline-brand focus-within:outline-2 focus-within:outline-offset-2">
                                 <input
                                     type="file"
@@ -662,8 +689,8 @@ export const PdfWorkspace = () => {
                                     Open PDF
                                 </span>
                             </label>
-                        </div>
-                    )}
+                        )}
+                    </div>
                 </header>
 
                 <div className="px-6 pb-4">

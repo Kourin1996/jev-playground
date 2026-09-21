@@ -84,6 +84,24 @@ test.beforeEach(async ({ page }) => {
     await stubChallenge(page);
 });
 
+test.describe("the header", () => {
+    test("credits the author and links to the source, before a document is open", async ({ page }) => {
+        // Both belong to the application rather than to a document, so the empty state is where
+        // this is asserted: a link that only appears once a PDF is loaded is one most visitors
+        // never see.
+        await page.goto("/");
+
+        await expect(page.getByRole("heading", { name: "PDF Semantic Finder" })).toBeVisible();
+        await expect(page.getByText("by kourin")).toBeVisible();
+
+        const source = page.getByRole("link", { name: "Source code on GitHub" });
+        await expect(source).toHaveAttribute("href", "https://github.com/Kourin1996/jev-playground");
+        // A new tab, and without handing the opener to it.
+        await expect(source).toHaveAttribute("target", "_blank");
+        await expect(source).toHaveAttribute("rel", /noopener/u);
+    });
+});
+
 test.describe("viewer", () => {
     test.skip(() => !existsSync(FIXTURE), "fixture PDF not present");
 
@@ -742,6 +760,21 @@ test.describe("viewer", () => {
             await expect(page.locator("ol li")).toHaveCount(0);
             await expect(page.locator(".pdf-finder-highlight")).toHaveCount(0);
         });
+    });
+
+    test("puts the source link at the right of the header, and keeps it there with a document open", async ({ page }) => {
+        await openFixture(page);
+
+        const source = page.getByRole("link", { name: "Source code on GitHub" });
+        await expect(source).toBeVisible();
+
+        const header = (await page.locator("header").boundingBox())!;
+        const link = (await source.boundingBox())!;
+        const open = (await page.getByText("Open PDF").boundingBox())!;
+
+        // Right-hand end of the header, and left of Open PDF rather than between it and the title.
+        expect(link.x).toBeGreaterThan(header.x + header.width / 2);
+        expect(link.x).toBeLessThan(open.x);
     });
 
     test("puts the extracted-text control at the right of the panel, with an icon", async ({ page }) => {
