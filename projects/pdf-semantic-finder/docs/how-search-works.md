@@ -683,10 +683,11 @@ These used to be hidden. The reason for showing them is §14.19: the same passag
 scraped in at 0.36 looks exactly like one the model was certain of — and 0.36 is precisely where the
 verdict is least stable.
 
-So the list carries a permanent **Model judgment** line saying what the numbers are and that they
-are not a measured match. In text, on screen, not in a hover tooltip: a reader on a touch screen or
-a keyboard never sees a tooltip, and what they would be left with is a percentage that looks like a
-measurement. The numbers are still never labelled "98% match" — that would claim a similarity
+The list carried a permanent **Model judgment** line saying what the numbers are and that they are
+not a measured match. It has since been removed (§14.33), so what a sighted reader sees is the
+percentage, the band — `confident`, `unsure` or `weak` — and the certainty beside it. Each figure
+keeps an accessible label naming it as the model's judgement, which is what a screen reader
+announces. The numbers are still never labelled "98% match": that would claim a similarity
 measurement this system does not make.
 
 Terms of the query that appear literally in a passage are emphasised in the preview. Only literal

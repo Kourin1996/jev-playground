@@ -110,11 +110,12 @@ The page has a top search area, a results panel on the left, and a PDF viewer on
 Each result shows the physical page number and original extracted text. “Page 3” means the third page in the file, regardless of printed page numbers. Do not show generated explanations.
 
 A meaning result also shows the two numbers the provider returned for that passage — the probability
-it assigned to the highest relevance level, and its own certainty in that probability. The list
-carries a persistent **Model judgment** line saying what they are and that they are not a measured
-match; the caveat is on screen in text rather than in a hover tooltip, which a touch or keyboard
-reader never reaches. Terms of the query that appear literally in a passage are emphasised in the
-preview; nothing else is, because the response does not say which words it read.
+it assigned to the highest relevance level, and its own certainty in that probability — labelled
+`confident`, `unsure` or `weak` against §7's thresholds. **No explanatory line accompanies them; see
+§14.33 for what was removed and what that costs.** Each number keeps an accessible label naming it
+as the model's judgement, which is what a screen reader announces. Terms of the query that appear
+literally in a passage are emphasised in the preview; nothing else is, because the response does not
+say which words it read.
 
 This replaces an earlier prohibition on showing a percentage at all. The prohibition was aimed at
 “98% match”, which claims a measurement of similarity the system does not make, and it is still in
@@ -1575,3 +1576,29 @@ A passage the search returned is selected as that result, so the list and the pa
 else — and most segments in this view are not results — is highlighted without joining the result
 list, because a list that gains a passage no search found is no longer a record of what the search
 said.
+
+### 14.33 The model-judgment explanation is gone
+
+The results panel carried a line above the list:
+
+> **Model judgment** — how relevant the model called each passage, and how certain it was. Not a
+> measured match: both move with the passages the same request carried.
+
+It was removed on request. Recorded rather than quietly dropped, because it existed for a reason
+that has not changed.
+
+**Why it was there.** §14.27 shows the percentages precisely because §14.19 measured the same
+passage crossing all three §7 bands depending on which other passages shared its request. A reader
+who cannot see the number cannot tell a passage the model was sure of from one that scraped in at
+0.36. But a bare percentage beside a passage reads as a measurement of that passage, which is the
+one thing it is not, and the line was what said so. An earlier round had put that caveat in a hover
+tooltip; the external review's fifth proposal asked for it to be visible text precisely because a
+touch or keyboard reader never reaches a tooltip.
+
+**What is left.** The band labels — `confident`, `unsure`, `weak` — and `certainty 0.80` beside each
+percentage, which at least name the second number. Each figure keeps
+`aria-label="Model judgment: …"`, so a screen reader still hears whose judgement it is; a sighted
+reader no longer sees it anywhere. Nothing claims a match percentage, and §3 still forbids one.
+
+**Cheapest way back**, if a reader is ever seen reading the percentage as a score: one line of
+`text-xs text-quaternary` above the list, which is exactly what was there.

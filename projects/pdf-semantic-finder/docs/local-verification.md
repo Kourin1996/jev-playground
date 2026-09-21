@@ -229,10 +229,9 @@ request in a search carries the same number, because the size of the state moves
 §14.19).
 
 Each result should now carry the model's own judgement — `72% confident · certainty 0.80` or
-similar — under a **Model judgment** line explaining what those numbers are. Check that line is
-**on screen as text**, not only in a hover tooltip: a reader on a touch screen or a keyboard never
-sees a tooltip, and a bare percentage reads as a measured match. Nothing anywhere should say
-"N% match".
+similar. The explanatory line above the list has been removed (§14.33), so check that nothing
+anywhere says "N% match" and that the band label — `confident`, `unsure` or `weak` — is beside each
+percentage. **View extracted text** sits at the right of the panel with an icon.
 
 Terms of the query that appear literally in a passage should be bold in the preview. A paraphrase
 match shows no emphasis at all — that is correct, not a bug: the response never says which words it

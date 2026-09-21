@@ -6,7 +6,7 @@
  * from it or reported as the number the provider returned.
  */
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight } from "@untitledui/icons";
+import { ArrowLeft, ArrowRight, FileSearch02 } from "@untitledui/icons";
 import { Badge } from "@/components/base/badges/badges";
 import { Button } from "@/components/base/buttons/button";
 import type { SearchHit, SearchMode, SearchStatus } from "@/lib/types";
@@ -201,10 +201,10 @@ export const SearchResults = ({
     if (!hasDocument) return null;
 
     const debugControl = (
-        // `px-3` rather than the panel's `px-6`: the button carries its own padding, and what
-        // should line up with the text above is the button's label, not its edge.
-        <div className="px-3 pt-1 pb-2">
-            <Button size="sm" color="tertiary" onClick={onToggleExtractedText}>
+        // Right-aligned, away from the reading column: it describes the search rather than being
+        // part of it, and the panel's own text starts on the left.
+        <div className="flex justify-end px-3 pt-1 pb-2">
+            <Button size="sm" color="tertiary" iconLeading={FileSearch02} onClick={onToggleExtractedText}>
                 {isShowingExtractedText ? "Hide extracted text" : "View extracted text"}
             </Button>
         </div>
@@ -318,21 +318,6 @@ export const SearchResults = ({
              * The count and the arrows sit with the list rather than at the foot of the panel,
              * where two results left them stranded a screen away from what they move between.
              */}
-            {/*
-             * What the percentages are, in text that is always on screen.
-             *
-             * It was a `title` tooltip first, which a touch or keyboard reader never sees — so the
-             * only thing they got was a number that looks like a measured match. §14.19 is why the
-             * caveat has to travel with it: the same passage crossed all three §7 bands depending
-             * on which others shared its request.
-             */}
-            {results.some((result) => result.judgement !== undefined) && (
-                <p className="px-6 pt-1 pb-2 text-xs text-quaternary">
-                    <span className="font-semibold text-tertiary">Model judgment</span> — how relevant the model called each passage, and how certain it was.
-                    Not a measured match: both move with the passages the same request carried.
-                </p>
-            )}
-
             {debugControl}
 
             <div className="flex items-center justify-between gap-2 px-6 pt-1 pb-2">
@@ -387,10 +372,10 @@ export const SearchResults = ({
                                             "ml-auto text-xs font-semibold tabular-nums",
                                             judgementTone(result.judgement.relevantProbability).className,
                                         )}
-                                        // Spelled out for anyone who reaches the row through a screen reader, where
-                                        // "95% confident · certainty 0.80" on its own says nothing about whose
-                                        // judgement it is. The heading above the list carries the same caveat in
-                                        // text, so it is not left to a hover.
+                                        // Spelled out because "95% confident · certainty 0.80" on its own says
+                                        // nothing about *whose* judgement it is. Since the explanatory line above
+                                        // the list was removed (§14.33), this label is the only place the word
+                                        // "judgment" still appears, so it stays.
                                         aria-label={`Model judgment: ${Math.round(result.judgement.relevantProbability * 100)} per cent relevant, certainty ${result.judgement.confidence.toFixed(2)}`}
                                     >
                                         {Math.round(result.judgement.relevantProbability * 100)}%{" "}

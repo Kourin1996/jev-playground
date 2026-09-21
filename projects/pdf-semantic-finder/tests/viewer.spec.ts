@@ -481,11 +481,12 @@ test.describe("viewer", () => {
         await expect(item).toContainText("95%");
         await expect(item).toContainText("confident");
         await expect(item).toContainText("certainty 0.80");
-        // Never as a similarity measurement: §3 still forbids "98% match", and the caveat is on
-        // screen in text rather than behind a hover.
+        // Never as a similarity measurement: §3 still forbids "98% match".
         await expect(page.getByText(/\d+% match/u)).toHaveCount(0);
-        await expect(page.getByText("Model judgment")).toBeVisible();
-        await expect(page.getByText("Not a measured match")).toBeVisible();
+        // The explanatory line is gone (§14.33); the accessible label naming whose judgement it is
+        // is what remains, and it is the only place the word survives.
+        await expect(page.getByText("Not a measured match")).toHaveCount(0);
+        await expect(item.getByLabel(/^Model judgment:/u)).toHaveCount(1);
 
         // Exact search produces no judgement, so nothing of the kind may appear.
         await searchExact(page, "第");
@@ -592,10 +593,11 @@ test.describe("viewer", () => {
             await expect(page.locator("ol li")).toHaveCount(1);
             await expect(page.locator("ol li mark")).not.toHaveCount(0);
 
-            // And switching mode does not relabel them either.
+            // And switching mode does not relabel them either: a meaning result keeps its
+            // judgement, which an exact result never has.
             await page.getByRole("radio", { name: "Exact text" }).click();
             await expect(page.locator("ol li")).toHaveCount(1);
-            await expect(page.getByText("Model judgment")).toBeVisible();
+            await expect(page.locator("ol li").first()).toContainText("certainty");
         });
 
         test("keeps the reader's chosen passage when the final ranking arrives", async ({ page }) => {
@@ -735,6 +737,21 @@ test.describe("viewer", () => {
             await expect(page.locator("ol li")).toHaveCount(0);
             await expect(page.locator(".pdf-finder-highlight")).toHaveCount(0);
         });
+    });
+
+    test("puts the extracted-text control at the right of the panel, with an icon", async ({ page }) => {
+        await openFixture(page);
+
+        const control = page.locator("aside").getByRole("button", { name: "View extracted text" });
+        await expect(control).toBeVisible();
+        // An icon, so the control reads as a control rather than as another line of panel text.
+        await expect(control.locator("svg")).toHaveCount(1);
+
+        // Right-aligned: its right edge sits near the panel's, not at the left where the text is.
+        const panel = (await page.locator("aside").boundingBox())!;
+        const button = (await control.boundingBox())!;
+        expect(panel.x + panel.width - (button.x + button.width)).toBeLessThan(40);
+        expect(button.x - panel.x).toBeGreaterThan(40);
     });
 
     test("keeps the extracted-text control with the results, not with the viewer", async ({ page }) => {
