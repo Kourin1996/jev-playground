@@ -106,6 +106,11 @@ npm run deploy     # npm run build && wrangler deploy
 The first deploy also creates the Durable Object class through the `v1` migration and asks
 Cloudflare to provision the custom domain. DNS and the certificate can take a few minutes.
 
+**Do the first one by hand, from a logged-in machine.** It provisions a hostname, runs a Durable
+Object migration and needs the secrets to be in place already — none of which a CI token should be
+doing the first time, when there is no known-good deployment to compare against. Once it has
+succeeded and §5 passes, §12 hands the repeat deploys to GitHub Actions.
+
 ## 5. Verify the deployment
 
 None of this can be checked locally. Do it every time, and record what you saw.
@@ -227,3 +232,118 @@ The gates above are for a deployment that exists. Before pointing a large audien
 3. Watch the provider budget under real concurrency, with more than one person searching at once.
 4. Decide what happens when the TypeSafe credential runs out of funds. Today that surfaces as a
    search error, which is correct but says nothing useful to the reader.
+
+## 11. Publishing the repository
+
+Separate from deploying, and the two are independent: the site can be public with the repository
+private, or the reverse. This section is the repository half. `README.md` under
+"Publishing this repository" records what was audited and what the conclusions were; this is the
+procedure.
+
+### 11.1 Re-run the checks rather than trusting the last ones
+
+The audit is a statement about a tree that has since moved.
+
+```bash
+git ls-files | xargs grep -rlI -e 'sk-' -e 'BEGIN .*PRIVATE KEY' -e 'Bearer ' 2>/dev/null
+git ls-files | grep -iE 'dev\.vars$|\.env$'          # expect nothing but .dev.vars.example
+git log --all --oneline -S"$(sed -n 's/^TYPESAFE_API_KEY=//p' .dev.vars)" -- 2>/dev/null
+git status --short --ignored | grep -E '^!!' | head   # confirm p/, docs/code-review-*, UNTITLED.md
+```
+
+The third command is the one that matters and the one most easily got wrong: it searches every
+commit, not the working tree. An empty result is the answer you want, so confirm the search itself
+works — run it once against a string you know is committed and see it match — before believing an
+empty result. A scanner that silently matches nothing looks exactly like a clean repository.
+
+`.dev.vars`, `p`, `docs/code-review-*.md` and `UNTITLED.md` are gitignored, not merely untracked.
+That distinction is the point: untracked files are one `git add -A` away from being published, and
+`docs/code-review-*.md` is a list of this deployment's open weaknesses.
+
+### 11.2 Put the work on `main`
+
+Anything not meant to be read has to go before the push, not after: a force-push does not remove a
+commit somebody already fetched, and GitHub keeps unreachable objects reachable by SHA for a while.
+Deleting the repository is the only reliable undo.
+
+```bash
+git switch main
+git merge --ff-only review-fixes/segmentation-batching-and-evaluation
+git log --oneline -5
+```
+
+### 11.3 Create it
+
+```bash
+gh repo create Kourin1996/pdf-finder --public --source=. --remote=origin --push
+```
+
+`--source=.` makes the repository from this working copy rather than an empty one, and `--push`
+sends the **current branch** and sets its upstream — so switch to `main` first, as §11.2 does. Other
+local branches stay local until pushed explicitly, which is the behaviour to want: publish the
+history you meant to publish, one branch at a time.
+
+If seeing it before the world does is worth more than one command, create it with `--private`, push,
+read the file list on GitHub, and flip the visibility in Settings. Going private → public is easy;
+the other direction does not un-fetch anything.
+
+`package.json` carries `"private": true` and there is no `LICENSE`, so the repository is readable
+without granting anyone rights. That is a coherent position and deliberate — publishing is not the
+same as open-sourcing. Adding a licence later is a decision, not an oversight to correct in passing.
+
+## 12. Deploying automatically from GitHub
+
+`.github/workflows/deploy.yml` runs the checks on every push and pull request, and deploys when
+`main` moves.
+
+### 12.1 What it runs
+
+`npx prettier --check .`, then `npm run fixtures:sample` (the suites skip loudly without the
+fixtures, and a skipped suite is a green run that proves nothing), then
+`npx playwright install --with-deps chromium`, then `npm run verify` — assets, typecheck, unit
+tests, end-to-end. The end-to-end half brings up both servers, including the `wrangler dev` preview
+that §5.3's headers are actually asserted against.
+
+Only then, and only on a push to `main`, `npm run build && npx wrangler deploy`, using the wrangler
+pinned in this repository's lockfile so the version that deploys is the version the checks ran
+against.
+
+### 12.2 What it deliberately does not run
+
+- **Secrets are never uploaded.** `TYPESAFE_API_KEY` is set once with `wrangler secret put` (§3.2)
+  and persists across deploys; a deploy neither reads nor rewrites it. So a leaked CI token can
+  deploy code, but cannot read the provider credential.
+- **The evaluation set does not run.** `npm run eval` calls the real provider and costs money per
+  run. It stays a deliberate local command.
+- **Nothing in §5 is automated.** The rate limit, the provider budget and the deployed headers are
+  checked against the real deployment, by hand, after the deploy.
+
+### 12.3 The token, and what it may do
+
+Create an API token from Cloudflare's **Edit Cloudflare Workers** template — Workers Scripts:Edit on
+the account plus Workers Routes:Edit on the zone, which is what a custom-domain deploy needs. Scope
+it to the one account and the `kourin.jp` zone. Check the template's current permission list against
+Cloudflare's documentation rather than against this paragraph; the templates change.
+
+Then, in the repository's Settings → Secrets and variables → Actions:
+
+```
+CLOUDFLARE_API_TOKEN     the token above
+CLOUDFLARE_ACCOUNT_ID    npx wrangler whoami
+```
+
+On a public repository these are not exposed to workflow runs from forked pull requests, and the
+deploy job is additionally gated on `github.event_name == 'push' && github.ref == 'refs/heads/main'`.
+Both matter: the gate is the one that stops a pull request from deploying, the fork rule is the one
+that stops it from reading the token.
+
+### 12.4 After it is automatic
+
+Rollback stays manual (§6) and so does verification (§5). A deploy that goes out automatically is
+still a deploy that changes what strangers see, so treat a merge to `main` as the release decision
+it now is — there is no separate approval step between the merge and the public site, by design,
+because a step nobody performs is worse than no step at all.
+
+The one recurring failure to expect is the cold-start race in §3.1. The workflow retries an
+end-to-end test once on CI for exactly that reason and for no other. A test that fails twice is a
+real failure.

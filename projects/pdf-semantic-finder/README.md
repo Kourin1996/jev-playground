@@ -142,6 +142,22 @@ shows exactly what would be uploaded.
 The public hostname is `pdf-finder.kourin.jp`, configured as a custom domain, and `workers_dev` is
 off so the Worker is not also reachable at a `workers.dev` address nobody announced.
 
+### Continuous deployment
+
+`.github/workflows/deploy.yml` runs formatting, typecheck, unit tests and the end-to-end suite on
+every push and pull request, and deploys on a push to `main` — nothing reaches the public hostname
+without passing the same suite `npm run verify` runs locally. It needs two repository secrets,
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; see
+[docs/deployment.md §12](docs/deployment.md).
+
+The Worker secret is not among them. `TYPESAFE_API_KEY` is set once with `wrangler secret put` and
+persists across deploys, so a deploy never reads it and a leaked CI token cannot reach the provider
+credential. The evaluation set is not run either: it calls the real provider and costs money, so it
+stays a deliberate local command.
+
+**The first deploy is done by hand**, from a logged-in machine. It provisions the custom domain,
+runs the Durable Object migration, and needs the secrets already in place.
+
 ### What it costs
 
 Measured, not estimated — see `docs/spec.md` §14.30 for the workings. Opening, rendering,
@@ -201,7 +217,9 @@ present. See `tests/fixtures/README.md` for what each file is for.
 ## Publishing this repository
 
 This is about making the repository **publicly readable**, which is a narrower question than
-open-sourcing it. `package.json` carries `"private": true` and there is no `LICENSE`, so nothing
+open-sourcing it. The step-by-step procedure — re-running the credential sweep, getting the work
+onto `main`, `gh repo create` — is [docs/deployment.md §11](docs/deployment.md). What follows is
+what was audited and what was concluded. `package.json` carries `"private": true` and there is no `LICENSE`, so nothing
 here grants anyone rights; that is a coherent position for a source-visible repository and needs no
 change. What follows is what would become visible.
 

@@ -104,6 +104,11 @@ npm run deploy     # npm run build && wrangler deploy
 初回デプロイでは `v1` マイグレーションによる Durable Object クラスの作成と、カスタムドメインの
 プロビジョニングも行われます。DNSと証明書には数分かかることがあります。
 
+**初回は手元のログイン済み環境から手作業で実行してください。** ホスト名のプロビジョニング、
+Durable Object のマイグレーション、そして secret が先に入っていることが前提になる操作であり、
+比較できる既知の正常なデプロイがまだ無い段階で CI のトークンにやらせるべきものではありません。
+初回が成功し §5 を通過したら、以降のデプロイは §12 で GitHub Actions に渡します。
+
 ## 5. デプロイ後の確認
 
 ここはローカルでは一切確認できません。毎回実施し、結果を記録してください。
@@ -221,3 +226,118 @@ dry run では代替できません。
 3. 複数人が同時に検索する実際の並行性のもとで、プロバイダ予算の挙動を観察してください。
 4. TypeSafe の残高が尽きたときにどうなるかを決めてください。現状は検索エラーとして表面化します。
    これは正しい挙動ですが、読者にとって有用なことは何も伝えていません。
+
+## 11. リポジトリの公開
+
+デプロイとは別の話で、両者は独立しています。サイトを公開してリポジトリを非公開にすることも、その逆も
+できます。ここはリポジトリ側の手順です。何を監査し何を結論としたかは `README.md` の
+"Publishing this repository" にあります。
+
+### 11.1 前回の監査を信用せず、もう一度実行する
+
+監査はその時点のツリーに対する記述であり、ツリーはその後動いています。
+
+```bash
+git ls-files | xargs grep -rlI -e 'sk-' -e 'BEGIN .*PRIVATE KEY' -e 'Bearer ' 2>/dev/null
+git ls-files | grep -iE 'dev\.vars$|\.env$'          # .dev.vars.example 以外は出ないはず
+git log --all --oneline -S"$(sed -n 's/^TYPESAFE_API_KEY=//p' .dev.vars)" -- 2>/dev/null
+git status --short --ignored | grep -E '^!!' | head   # p/, docs/code-review-*, UNTITLED.md を確認
+```
+
+重要かつ最も間違えやすいのは3番目です。作業ツリーではなく全コミットを検索します。求める結果は
+「何も出ない」ことなので、**空の結果を信じる前に検索自体が機能することを確かめてください** —
+コミット済みだと分かっている文字列で一度実行し、一致することを見ます。黙って何も一致しない
+スキャナは、きれいなリポジトリと見分けがつきません。
+
+`.dev.vars`・`p`・`docs/code-review-*.md`・`UNTITLED.md` は untracked ではなく gitignore 済みです。
+この区別が要点で、untracked なファイルは `git add -A` 1回で公開されますし、
+`docs/code-review-*.md` はこのデプロイの未解決の弱点の一覧です。
+
+### 11.2 作業を `main` に載せる
+
+公開したくないものの排除は push の前に行う必要があります。誰かが既に fetch したコミットは
+force-push では消えませんし、GitHub は到達不能になったオブジェクトをしばらく SHA 指定で
+参照可能なまま保持します。確実な取り消しはリポジトリの削除だけです。
+
+```bash
+git switch main
+git merge --ff-only review-fixes/segmentation-batching-and-evaluation
+git log --oneline -5
+```
+
+### 11.3 作成する
+
+```bash
+gh repo create Kourin1996/pdf-finder --public --source=. --remote=origin --push
+```
+
+`--source=.` は空のリポジトリではなくこの作業コピーから作成し、`--push` は**現在のブランチ**を
+push して upstream に設定します。したがって §11.2 のように先に `main` へ切り替えてください。
+他のローカルブランチは明示的に push するまでローカルに残ります — 公開するつもりの履歴だけを
+1ブランチずつ公開できる、望ましい挙動です。
+
+世間に見せる前に自分で確認したい場合は `--private` で作成して push し、GitHub 上でファイル一覧を
+確認してから Settings で可視性を切り替えてください。private → public は簡単ですが、逆方向は
+既に fetch されたものを取り消せません。
+
+`package.json` は `"private": true` を持ち `LICENSE` はありません。つまり読めるだけで誰にも権利は
+与えていません。これは意図した整合的な立場です — 公開することと OSS にすることは別です。
+後からライセンスを付けるかどうかは判断であって、ついでに直すべき見落としではありません。
+
+## 12. GitHub からの自動デプロイ
+
+`.github/workflows/deploy.yml` が、すべての push と pull request で検査を実行し、`main` が動いた
+ときにデプロイします。
+
+### 12.1 実行される内容
+
+`npx prettier --check .`、次に `npm run fixtures:sample`(fixture が無いとスイートは明示的に skip し、
+skip されたスイートは何も証明しない green です)、次に
+`npx playwright install --with-deps chromium`、そして `npm run verify` — assets・typecheck・
+単体テスト・E2E。E2E 側は両方のサーバを立ち上げ、§5.3 のヘッダが実際に検証される `wrangler dev`
+プレビューもここに含まれます。
+
+そのうえで、`main` への push のときだけ `npm run build && npx wrangler deploy` を実行します。
+このリポジトリの lockfile に固定された wrangler を使うので、デプロイするバージョンは検査が
+走ったバージョンと同じです。
+
+### 12.2 意図的に実行しないこと
+
+- **secret はアップロードしません。** `TYPESAFE_API_KEY` は `wrangler secret put` で一度設定すれば
+  (§3.2)デプロイをまたいで保持され、デプロイはそれを読むことも書き換えることもしません。つまり
+  CI トークンが漏れてもコードはデプロイできますが、プロバイダの認証情報は読み出せません。
+- **評価セットは実行しません。** `npm run eval` は実際のプロバイダを呼び、実行ごとに費用が
+  かかります。意図して手元で実行するコマンドのままにします。
+- **§5 は一切自動化していません。** レート制限・プロバイダ予算・デプロイされたヘッダは、
+  デプロイ後に実物に対して手作業で確認します。
+
+### 12.3 トークンと、その権限
+
+Cloudflare の **Edit Cloudflare Workers** テンプレートから API トークンを作成してください。
+アカウントの Workers Scripts:Edit とゾーンの Workers Routes:Edit を含み、カスタムドメインへの
+デプロイに必要な範囲です。対象を当該アカウントと `kourin.jp` ゾーンに限定してください。
+テンプレートの現在の権限一覧は、この段落ではなく Cloudflare の公式文書で確認してください。
+テンプレートは変わります。
+
+そのうえでリポジトリの Settings → Secrets and variables → Actions に:
+
+```
+CLOUDFLARE_API_TOKEN     上記のトークン
+CLOUDFLARE_ACCOUNT_ID    npx wrangler whoami
+```
+
+public リポジトリでは、fork からの pull request の実行にこれらは渡されません。加えて deploy ジョブ
+自体が `github.event_name == 'push' && github.ref == 'refs/heads/main'` で制限されています。
+両方に意味があります — pull request がデプロイするのを止めるのは後者、トークンを読むのを止めるのは
+前者です。
+
+### 12.4 自動化した後
+
+ロールバック(§6)も確認(§5)も手作業のままです。自動で出ていくデプロイであっても、不特定多数が
+見るものを変える行為であることは変わりません。`main` へのマージがリリース判断そのものになったと
+考えてください。マージと公開サイトの間に承認ステップを置いていないのは意図的です — 誰も実施しない
+ステップは、ステップが無いことより悪いからです。
+
+繰り返し起きうる失敗は §3.1 のコールドスタート競合だけです。ワークフローが CI で E2E を1回だけ
+リトライするのは、まさにこの理由のためであり、他の理由のためではありません。2回とも失敗する
+テストは本物の失敗です。

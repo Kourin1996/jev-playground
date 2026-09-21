@@ -25,6 +25,15 @@ export default defineConfig({
     testDir: "./tests",
     testMatch: "**/*.spec.ts",
     fullyParallel: false,
+    /*
+     * One retry on CI, and none locally.
+     *
+     * Not a general allowance for flaky tests. It covers one known race: both web servers come up
+     * at once while the build runs, and on a cold runner a test occasionally times out waiting for
+     * a dev server that is still busy. A real failure repeats, so a retry does not hide one — but a
+     * run that needed a retry is worth looking at rather than waving through.
+     */
+    retries: process.env.CI ? 1 : 0,
     reporter: [["list"]],
     projects: [
         {

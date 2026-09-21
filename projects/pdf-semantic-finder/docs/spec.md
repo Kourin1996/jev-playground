@@ -1602,3 +1602,41 @@ reader no longer sees it anywhere. Nothing claims a match percentage, and §3 st
 
 **Cheapest way back**, if a reader is ever seen reading the percentage as a score: one line of
 `text-xs text-quaternary` above the list, which is exactly what was there.
+
+### 14.34 Publication and continuous deployment
+
+Two mechanisms were added so the repository and the site can be made public and stay current. They
+are independent: either can happen without the other.
+
+**Procedure, not code, for the repository.** `docs/deployment.md` §11 records the publication steps.
+The one worth stating here is that the credential sweep must be re-run rather than cited, and its
+searcher must be shown to match something before an empty result is believed — this repository has
+already seen a secret scanner that silently matched nothing, including the file holding the key.
+`.dev.vars`, `p`, `docs/code-review-*.md` and `UNTITLED.md` are gitignored rather than untracked, so
+a `git add -A` cannot publish the list of this deployment's open weaknesses along with it.
+
+**A workflow for the site.** `.github/workflows/deploy.yml` runs `prettier --check`, the fixtures,
+and `npm run verify` on every push and pull request, then `npm run build && npx wrangler deploy` on
+a push to `main`. The end-to-end half is not optional decoration in this pipeline: §9.3's admission
+limits and §10's response headers are both things a deployment can lose without any visible symptom,
+and `tests/headers.spec.ts` against the `wrangler dev` preview is what notices.
+
+Three things it deliberately does not do:
+
+- **Upload secrets.** `TYPESAFE_API_KEY` is set once with `wrangler secret put` and persists across
+  deploys. A deploy neither reads nor rewrites it, so a leaked CI token can ship code but cannot
+  reach the provider credential — which keeps §10's credential boundary a property of the system
+  rather than of who holds a token.
+- **Run the evaluation set.** `npm run eval` calls the real provider and costs money per run. §11.1
+  also requires the held-out set to be run deliberately and reported, which an automatic run on
+  every merge would quietly turn into a number nobody read.
+- **Verify the deployment.** Everything in `docs/deployment.md` §5 — the rate-limit refusal, the
+  provider budget, the headers on a real asset path — is checked by hand against the real origin
+  afterwards. None of it can be observed from the runner.
+
+The first deploy stays manual. It provisions the custom domain, runs the `v1` Durable Object
+migration and presumes the secrets are already set, none of which should be a CI token's first act
+when there is no known-good deployment to compare against.
+
+`playwright.config.ts` now retries once when `CI` is set. That covers exactly one documented race —
+both web servers starting while the build runs — and nothing else. A failure that repeats is real.
