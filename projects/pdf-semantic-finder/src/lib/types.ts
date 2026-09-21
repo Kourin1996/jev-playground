@@ -96,6 +96,20 @@ export const LIMITS = {
      */
     maxCharactersPerBatch: 10_000,
     /**
+     * Input tokens one provider request may carry.
+     *
+     * Measured against the real provider, not published here: 123 dense Japanese passages
+     * succeeded at 47,943 input tokens and 124 returned
+     * `HTTP 400 {"error_type":"max_tokens_exceeded"}`. See docs/spec.md §14.28.
+     *
+     * Nothing enforces it at runtime, because `maxSegmentsPerBatch` of 4 sits two orders of
+     * magnitude inside it — a four-passage request measured 1,699 tokens. It is recorded, and
+     * asserted in `ranking.test.ts`, so that raising the batch size collides with a number here
+     * rather than with a 400 in the middle of a reader's search. A count that is safe for English
+     * prose is not safe for dense Japanese, so any future packing by count has to bound tokens too.
+     */
+    maxInputTokensPerRequest: 48_000,
+    /**
      * In-flight requests.
      *
      * Set from a measured sweep rather than from arithmetic. On a 468-request search the same

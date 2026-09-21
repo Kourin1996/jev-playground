@@ -4,6 +4,7 @@
  * Every module under test is pure, so none of this needs a network, a PDF, or a Workers runtime.
  */
 import { describe, expect, it } from "vitest";
+import { estimateBatchInputTokens } from "../worker/admission/estimate-tokens";
 import {
     RELEVANCE_CRITERIA,
     billedCharacters,
@@ -298,6 +299,25 @@ describe("packBatches", () => {
         expect(batches).toHaveLength(1);
         expect(batches[0].state).toHaveLength(2);
         expect(batches[0].evaluate).toHaveLength(2);
+    });
+
+    it("keeps a full batch inside the provider's per-request token ceiling", () => {
+        /*
+         * The ceiling is a measured property of the provider (§14.28): 123 dense Japanese passages
+         * succeeded at 47,943 input tokens, 124 returned 400 `max_tokens_exceeded`. Exceeding it
+         * fails the whole search, not one passage, so the batch size has to stay inside it.
+         *
+         * Checked against the worst case the validator admits — every passage at the per-segment
+         * maximum with two neighbours of the same size — rather than against a typical document.
+         */
+        const worstCase = Array.from({ length: LIMITS.maxSegmentsPerBatch }, (_, index) => ({
+            ...segment(index + 1, "あ".repeat(LIMITS.maxSegmentCharacters)),
+            contextBefore: "い".repeat(LIMITS.maxSegmentCharacters),
+            contextAfter: "う".repeat(LIMITS.maxSegmentCharacters),
+        }));
+
+        const batch = packBatches(worstCase)[0];
+        expect(estimateBatchInputTokens(batch)).toBeLessThan(LIMITS.maxInputTokensPerRequest);
     });
 
     it("sends the same total whatever the batch size, because a batch is not a cost lever", () => {

@@ -1382,3 +1382,46 @@ and it now sits with the rest of what is said about the search instead of beside
 
 **Opening another PDF closes it.** The extraction on screen belonged to the document being replaced,
 so the new one used to arrive behind a debug view of the old one.
+
+### 14.28 Could a search be one request? Measured against the provider
+
+The question the call count invites. A 33-page document produces 217 questions in 55 requests, and
+§14.27 established that the batch size is not a cost lever — so why not send one request?
+
+**There is a hard per-request ceiling, and it is about 48,000 input tokens.** Binary-searched
+against the real provider with the near-limit Japanese fixture: 123 passages succeeded at 47,943
+input tokens, 124 returned `HTTP 400 {"error_type":"max_tokens_exceeded"}`. Nothing in the
+specification recorded this before; it was found by asking.
+
+So one request is possible only for a document whose entire state fits in that ceiling. At the
+declared 2,000-segment cap a search needs at least sixteen requests, not one. The 217-segment
+document in the question is already past it.
+
+**Where it does fit, it is cheaper and faster.** `assets/bitcoin.pdf`, 86 passages, one query:
+
+|              |        Batched at 4 | All 86 in one |
+| ------------ | ------------------: | ------------: |
+| Requests     |                  22 |             1 |
+| Input tokens |              45,462 |        39,295 |
+| Elapsed      | 5,687 ms sequential |        761 ms |
+
+It also answers the same: the top result is identical, and of 86 passages only one changes §7 band —
+and it changes from `uncertain` to `no_match`, which §14.27 means the reader never sees either way.
+
+**And yet it is worse, which is the point.** The held-out evaluation set, two runs each:
+
+|                          |         Top-3 hit | Miss | False positive |
+| ------------------------ | ----------------: | ---: | -------------: |
+| Batched at 4             |             26/26 | 0/26 |            0/6 |
+| One request per document | 23/26, then 22/26 | 0/26 |            0/6 |
+
+Three to four answerable queries out of twenty-six lose their passage — not to a miss, but to being
+pushed out of the top three by the re-ranking a large state produces. Reproducible across runs and
+in the direction §14.19 predicted. Observed directly in the same experiment: a passage scored 0.45
+with a state of four and 0.01 with a state of 86.
+
+**Conclusion.** Consolidation buys about 14% of the tokens and most of the latency, and costs
+roughly 12% of the top-3 hit rate. The batch size stays at 4. If it is ever revisited, the packing
+must bound a request by _estimated tokens_ rather than by passage count — a count that is safe for
+English prose exceeds the ceiling on dense Japanese, and the failure is an `HTTP 400` for the whole
+search.
