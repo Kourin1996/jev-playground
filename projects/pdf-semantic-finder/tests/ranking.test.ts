@@ -89,6 +89,52 @@ describe("validateSearchRequest", () => {
         if (!result.ok) expect(result.error.code).toBe("segment_text_too_long");
     });
 
+    it.each(["contextBefore", "contextAfter"])("rejects %s longer than the per-segment limit", (field) => {
+        // Context was checked only for being a string. Unbounded, it walked straight past the
+        // batch budget: a short target with 100,000 characters of context packed one request of
+        // 100,018 characters against a stated maximum of 10,000.
+        const segments = [{ ...segment(1), [field]: "い".repeat(LIMITS.maxSegmentCharacters + 1) }];
+        const result = validateSearchRequest(request({ segments }), 512);
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.code).toBe("segment_text_too_long");
+    });
+
+    it("rejects the reproduced case: a short target carrying a whole document of context", () => {
+        const segments = [{ ...segment(1, "本文"), contextBefore: "い".repeat(100_000) }];
+        const result = validateSearchRequest(request({ segments }), 512);
+
+        expect(result.ok).toBe(false);
+    });
+
+    it("accepts context of exactly the per-segment limit, counted by code point", () => {
+        // Counted with `countCharacters` like the target text: `.length` would refuse a Japanese
+        // document of surrogate pairs at half the stated limit.
+        const segments = [
+            {
+                ...segment(1),
+                contextBefore: "い".repeat(LIMITS.maxSegmentCharacters),
+                contextAfter: "𠮟".repeat(LIMITS.maxSegmentCharacters),
+            },
+        ];
+
+        expect(validateSearchRequest(request({ segments }), 512).ok).toBe(true);
+    });
+
+    it("still accepts a document at the character cap with full-size context on every segment", () => {
+        // The regression pin. Each segment's text travels three times, so counting context in the
+        // aggregate would reject a document the client had already accepted — and the reader would
+        // see a search error where a limit message belongs.
+        const count = LIMITS.maxExtractedCharacters / LIMITS.maxSegmentCharacters;
+        const segments = Array.from({ length: count }, (_, index) => ({
+            ...segment(index + 1, "あ".repeat(LIMITS.maxSegmentCharacters)),
+            contextBefore: "い".repeat(LIMITS.maxSegmentCharacters),
+            contextAfter: "う".repeat(LIMITS.maxSegmentCharacters),
+        }));
+
+        expect(validateSearchRequest(request({ segments }), 512).ok).toBe(true);
+    });
+
     it("counts characters by code point, so a surrogate pair counts once", () => {
         const text = "𠮟".repeat(LIMITS.maxSegmentCharacters);
         const result = validateSearchRequest(request({ segments: [segment(1, text)] }), 512);
@@ -273,6 +319,16 @@ describe("packBatches", () => {
 });
 
 describe("buildJevRequest", () => {
+    it("refuses to build a batch over the character budget", () => {
+        // `maxCharactersPerBatch` and `billedCharacters` had no enforcement anywhere once the
+        // packing stopped consulting them — they were referenced only by tests, which asserted the
+        // bound the validator never applied. Unreachable now that context is bounded, which is
+        // exactly why a broken invariant should be loud rather than silently expensive.
+        const oversized = { ...segment(1), contextBefore: "い".repeat(LIMITS.maxCharactersPerBatch) };
+
+        expect(() => buildJevRequest("jev-1.13.0", "q", { evaluate: [oversized], state: [oversized] })).toThrow();
+    });
+
     it("asks about the evaluated passages only, while the state carries all of them", () => {
         // A padded state must not turn into extra questions: an answer nobody asked for would
         // either be discarded or, worse, counted twice in the ranking.

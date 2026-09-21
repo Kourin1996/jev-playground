@@ -7,10 +7,17 @@
  */
 import type { SearchErrorCode, SearchErrorResponse, SearchStreamMessage } from "@/lib/types";
 import { LIMITS } from "@/lib/types";
+import { estimateSearchInputTokens } from "./admission/estimate-tokens";
+import { readBoundedJson } from "./http/read-body";
+import { isSameOriginRequest } from "./http/same-origin";
+import { withSecurityHeaders } from "./http/security-headers";
 import { buildJevRequest, packBatches } from "./search/build-jev-request";
 import { callJevBatches } from "./search/call-jev";
 import { rankResults } from "./search/rank-results";
 import { validateSearchRequest } from "./search/validate";
+
+// Re-exported because a Durable Object class has to be a named export of the entrypoint module.
+export { SearchBudget } from "./admission/search-budget";
 
 /**
  * Bindings come from `wrangler types` (`worker-env.d.ts`); secrets are declared here because they
@@ -20,6 +27,19 @@ type WorkerEnv = Env & {
     TYPESAFE_API_KEY: string;
     TYPESAFE_MODEL?: string;
 };
+
+/**
+ * Both admission bindings are optional.
+ *
+ * A unit test, a `wrangler dev` older than the binding, and a misconfigured deployment all reach
+ * this code without them. Failing hard would make the tests depend on the platform; failing open
+ * silently would leave a public endpoint unmetered — so it fails open and says so in the log, and
+ * the deployment checklist in README.md is what catches it for real.
+ */
+const admission = (env: WorkerEnv) => ({
+    rateLimit: (env as { SEARCH_RATE_LIMIT?: { limit: (options: { key: string }) => Promise<{ success: boolean }> } }).SEARCH_RATE_LIMIT,
+    budget: (env as { SEARCH_BUDGET?: DurableObjectNamespace<import("./admission/search-budget").SearchBudget> }).SEARCH_BUDGET,
+});
 
 /**
  * Fixed, safe messages. They never describe which segment or which text was at fault, because
@@ -37,6 +57,8 @@ const ERROR_MESSAGES: Record<SearchErrorCode, string> = {
     segment_text_too_long: `A segment may be at most ${LIMITS.maxSegmentCharacters} characters.`,
     extracted_text_too_long: `This document exceeds the ${LIMITS.maxExtractedCharacters.toLocaleString("en-US")}-character limit.`,
     request_body_too_large: "The search request was too large.",
+    rate_limited: "Too many searches from this connection. Wait a few seconds and try again.",
+    capacity_exhausted: "The search service is busy. Try again in a moment.",
     provider_unavailable: "The search could not be completed.",
     provider_timeout: "The search could not be completed.",
     provider_malformed_response: "The search could not be completed.",
@@ -45,6 +67,9 @@ const ERROR_MESSAGES: Record<SearchErrorCode, string> = {
 };
 
 const STATUS_CODES: Partial<Record<SearchErrorCode, number>> = {
+    request_body_too_large: 413,
+    rate_limited: 429,
+    capacity_exhausted: 503,
     provider_unavailable: 502,
     provider_timeout: 504,
     provider_malformed_response: 502,
@@ -52,19 +77,29 @@ const STATUS_CODES: Partial<Record<SearchErrorCode, number>> = {
     internal_error: 500,
 };
 
-const errorResponse = (code: SearchErrorCode): Response => {
-    const body: SearchErrorResponse = { error: { code, message: ERROR_MESSAGES[code] } };
-    return Response.json(body, { status: STATUS_CODES[code] ?? 400 });
+/**
+ * Every `/api/` response carries these.
+ *
+ * `no-store` because none of this may be cached (spec §10), and `nosniff` because an error body is
+ * JSON and must never be interpreted as anything else. Deliberately no `Access-Control-Allow-Origin`
+ * anywhere: nothing cross-origin may read this endpoint.
+ */
+const apiHeaders = {
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
 };
 
-/**
- * Newline-delimited JSON, so the reader is shown passages while the rest are still being judged.
- *
- * `no-transform` because a proxy that buffered the body would undo the entire point, and
- * `no-store` because none of this may be cached (spec §10).
- */
+const errorResponse = (code: SearchErrorCode, extraHeaders: Record<string, string> = {}): Response => {
+    const body: SearchErrorResponse = { error: { code, message: ERROR_MESSAGES[code] } };
+    return Response.json(body, { status: STATUS_CODES[code] ?? 400, headers: { ...apiHeaders, ...extraHeaders } });
+};
+
+/** Newline-delimited JSON, so the reader is shown passages while the rest are still being judged. */
 const streamHeaders = {
+    ...apiHeaders,
     "Content-Type": "application/x-ndjson; charset=utf-8",
+    // `no-transform` on top of `no-store`: a proxy that buffered the body would undo streaming.
     "Cache-Control": "no-store, no-transform",
     "X-Accel-Buffering": "no",
 };
@@ -84,21 +119,24 @@ const sleep = (milliseconds: number, signal?: AbortSignal): Promise<void> =>
 
 const handleSearch = async (request: Request, env: WorkerEnv): Promise<Response> => {
     const startedAt = Date.now();
+    const { rateLimit, budget } = admission(env);
 
-    if (!request.headers.get("Content-Type")?.includes("application/json")) {
-        return errorResponse("invalid_request");
+    // Nothing below this comment has read the body: an unadmitted caller must not be able to make
+    // this Worker buffer four megabytes, however many times they ask.
+    if (!isSameOriginRequest(request.headers, request.url)) return errorResponse("invalid_request");
+
+    if (rateLimit === undefined) {
+        console.warn(JSON.stringify({ event: "admission_unavailable", gate: "rate_limit" }));
+    } else {
+        const key = request.headers.get("CF-Connecting-IP") ?? "unknown";
+        const { success } = await rateLimit.limit({ key });
+        if (!success) return errorResponse("rate_limited", { "Retry-After": "60" });
     }
 
-    const rawBody = await request.text();
-    let parsed: unknown;
+    const body = await readBoundedJson(request, { signal: request.signal });
+    if (!body.ok) return errorResponse(body.code);
 
-    try {
-        parsed = JSON.parse(rawBody);
-    } catch {
-        return errorResponse("invalid_request");
-    }
-
-    const validated = validateSearchRequest(parsed, new TextEncoder().encode(rawBody).byteLength);
+    const validated = validateSearchRequest(body.value, body.byteLength);
     if (!validated.ok) return errorResponse(validated.error.code);
 
     const { documentId, requestId, query, segments } = validated.value;
@@ -109,7 +147,29 @@ const handleSearch = async (request: Request, env: WorkerEnv): Promise<Response>
     }
 
     const model = env.TYPESAFE_MODEL ?? "jev-1.13.0";
-    const batches = packBatches(segments).map((batch) => buildJevRequest(model, query, batch));
+    const packed = packBatches(segments);
+    const batches = packed.map((batch) => buildJevRequest(model, query, batch));
+
+    // Nothing below this has called the provider. The reservation is sized from the batches that
+    // were actually packed, not from what the client claimed, and is released in `run`'s `finally`.
+    const reservationId = crypto.randomUUID();
+    if (budget === undefined) {
+        console.warn(JSON.stringify({ event: "admission_unavailable", gate: "provider_budget" }));
+    } else {
+        const outcome = await budget.get(budget.idFromName("global")).reserve(reservationId, estimateSearchInputTokens(packed), packed.length);
+        if (!outcome.ok) {
+            console.warn(JSON.stringify({ event: "search_refused", code: "capacity_exhausted", batchCount: packed.length }));
+            return errorResponse("capacity_exhausted", { "Retry-After": String(outcome.retryAfterSeconds) });
+        }
+    }
+
+    const releaseBudget = () => {
+        if (budget === undefined) return;
+        void budget
+            .get(budget.idFromName("global"))
+            .release(reservationId)
+            .catch(() => undefined);
+    };
 
     const stream = new TransformStream<Uint8Array, Uint8Array>();
     const writer = stream.writable.getWriter();
@@ -218,7 +278,13 @@ const handleSearch = async (request: Request, env: WorkerEnv): Promise<Response>
             console.error(JSON.stringify({ event: "search_failed", code: "internal_error", name: (error as Error | undefined)?.name ?? "Error" }));
             emit({ type: "error", error: { code: "internal_error", message: ERROR_MESSAGES.internal_error } });
         })
-        .finally(() => void writer.close().catch(() => undefined));
+        .finally(() => {
+            // Returned on every path, including a reader that disconnected mid-stream. The
+            // reservation also expires on its own, so a lost release costs one deadline, not the
+            // budget.
+            releaseBudget();
+            void writer.close().catch(() => undefined);
+        });
 
     return new Response(stream.readable, { headers: streamHeaders });
 };
@@ -228,7 +294,7 @@ export default {
         const url = new URL(request.url);
 
         if (url.pathname === "/api/search") {
-            if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+            if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405, headers: apiHeaders });
 
             try {
                 return await handleSearch(request, env);
@@ -245,8 +311,8 @@ export default {
             }
         }
 
-        if (url.pathname.startsWith("/api/")) return new Response("Not Found", { status: 404 });
+        if (url.pathname.startsWith("/api/")) return new Response("Not Found", { status: 404, headers: apiHeaders });
 
-        return env.ASSETS.fetch(request);
+        return withSecurityHeaders(await env.ASSETS.fetch(request));
     },
 } satisfies ExportedHandler<WorkerEnv>;

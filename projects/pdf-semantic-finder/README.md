@@ -90,6 +90,37 @@ npm run eval         # the fixed evaluation set; needs fixture PDFs and a creden
 npm run deploy       # build, then wrangler deploy
 ```
 
+### Deployment
+
+**Workers Paid is required.** A search at the 2,000-segment cap issues 500 provider calls in a
+single Worker invocation, and up to 1,000 with the one retry the specification allows. Workers Free
+allows 50 subrequests, so a document of about 200 segments already exceeds it — the failure would
+land on a reader mid-search, not on whoever deployed it.
+
+The allowance is declared rather than assumed, in `wrangler.jsonc` under `limits`, and pinned in
+code as `LIMITS.declaredSubrequestAllowance` with a test tying it to `maxSegmentCount`. If
+`wrangler deploy` rejects the `limits` key, the account is not on the standard usage model and
+cannot serve the declared document capacity. Do not lower the product limit to fit the plan
+silently.
+
+Two bindings must exist before the app is public. Without them `/api/search` is an unmetered path
+to the provider account:
+
+- `SEARCH_RATE_LIMIT`, a rate-limit binding, refuses a flood from one client before the request
+  body is read. It is evaluated per Cloudflare location, so it bounds one client rather than the
+  account.
+- `SEARCH_BUDGET`, a Durable Object, holds the account-wide provider budget. It is the gate that
+  matters: a search at the cap runs at about 222,000 provider tokens a second against a published
+  250,000, so a second concurrent one is already over. It holds counters and expiring reservations
+  only — never a query, a passage, or a document identifier.
+
+Both are typed optional, so a missing binding logs `admission_unavailable` and continues rather
+than breaking local development. **That also means a misconfigured deployment silently has no
+limiter**, so confirm after deploying that a refusal actually happens.
+
+Publish `dist/client`, never `dist/` — `dist/pdf_finder` holds the built Worker and, locally, a
+copy of `.dev.vars`.
+
 ### Credentials
 
 Credentials stay server side. Copy `.dev.vars.example` to `.dev.vars` for local development and

@@ -64,8 +64,22 @@ export const validateSearchRequest = (body: unknown, bodyByteLength: number): Va
         if (length > LIMITS.maxSegmentCharacters) return fail("segment_text_too_long");
         aggregateCharacters += length;
 
-        if (contextBefore !== undefined && typeof contextBefore !== "string") return fail("invalid_request");
-        if (contextAfter !== undefined && typeof contextAfter !== "string") return fail("invalid_request");
+        // Context is a *neighbouring segment's* text (`buildSegments` takes it from the adjacent
+        // group), so the same per-segment limit applies to it and `segment_text_too_long` is
+        // literally accurate. Unbounded, it defeated the batch budget entirely: a short target
+        // with 100,000 characters of context packed one batch of 100,018 against a stated
+        // maximum of 10,000.
+        //
+        // `countCharacters`, not `.length`, for the reason the target text uses it — a Japanese
+        // document of surrogate pairs would otherwise be refused at half the stated limit.
+        if (contextBefore !== undefined) {
+            if (typeof contextBefore !== "string") return fail("invalid_request");
+            if (countCharacters(contextBefore) > LIMITS.maxSegmentCharacters) return fail("segment_text_too_long");
+        }
+        if (contextAfter !== undefined) {
+            if (typeof contextAfter !== "string") return fail("invalid_request");
+            if (countCharacters(contextAfter) > LIMITS.maxSegmentCharacters) return fail("segment_text_too_long");
+        }
 
         validated.push({
             id,
@@ -75,6 +89,12 @@ export const validateSearchRequest = (body: unknown, bodyByteLength: number): Va
         });
     }
 
+    // Target text only, deliberately. Each segment's text travels three times — itself and as each
+    // neighbour's context — so a document at exactly the character cap bills about three times it.
+    // Counting context here would reject a document the client had already accepted, and the reader
+    // would see a search error where a limit message belongs; that is the regression
+    // `maxRequestBodyBytes` records from when it was 256 KiB. The aggregate bound on everything
+    // transmitted is `maxRequestBodyBytes`, enforced in `worker/http/read-body.ts`.
     if (aggregateCharacters > LIMITS.maxExtractedCharacters) return fail("extracted_text_too_long");
 
     return { ok: true, value: { documentId, requestId, query, segments: validated } };

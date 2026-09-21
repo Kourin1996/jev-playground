@@ -113,6 +113,19 @@ export const LIMITS = {
     maxConcurrentRequests: 24,
     searchDeadlineMs: 15_000,
     maxResults: 3,
+    /**
+     * Subrequests one search may issue, and therefore the Workers plan this product requires.
+     *
+     * `maxSegmentCount / maxSegmentsPerBatch` is 500 batches at the cap, each allowed one retry by
+     * §6.4, so a single invocation issues up to 1,000 fetches. Workers Free allows 50, which a
+     * document of about 200 segments already exceeds — so this is a deployment contract, not a
+     * tuning knob. Lowering it would mean lowering `maxSegmentCount`, which §2 derives from
+     * measurement.
+     *
+     * Declared in `wrangler.jsonc` under `limits.subrequests` as well, so a deployment to a plan
+     * that cannot serve it fails at deploy time rather than at a reader's fiftieth subrequest.
+     */
+    declaredSubrequestAllowance: 1_100,
 } as const;
 
 /** Relevance thresholds on P(level 2) (spec §7). Hypotheses to calibrate, not measured values. */
@@ -412,6 +425,8 @@ export type SearchErrorCode =
     | "segment_text_too_long"
     | "extracted_text_too_long"
     | "request_body_too_large"
+    | "rate_limited"
+    | "capacity_exhausted"
     | "provider_unavailable"
     | "provider_timeout"
     | "provider_malformed_response"

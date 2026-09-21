@@ -1,0 +1,15 @@
+# Response headers for the static assets Cloudflare serves without invoking the Worker.
+#
+# `wrangler.jsonc` does not set `run_worker_first`, so the asset router answers /index.html and
+# /assets/* directly; worker/http/security-headers.ts covers only the single-page-application
+# fallback. The two sets must stay identical.
+#
+# The Content-Security-Policy is not here yet: it has to be written against what PDF.js actually
+# loads and verified against the real viewer, which is a separate change with its own test.
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()

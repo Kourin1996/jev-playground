@@ -9,6 +9,26 @@
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
     },
+    // Per-client admission, checked before the request body is read (spec §9.3). Per-colo rather
+    // than global: it bounds one client, not the provider account. SEARCH_BUDGET does that.
+    "ratelimits": [
+        {
+            "name": "SEARCH_RATE_LIMIT",
+            "namespace_id": "1001",
+            "simple": { "limit": 6, "period": 60 },
+        },
+    ],
+    // The account-wide provider budget. One instance, holding counters and expiring reservations
+    // only — never a query, a passage, or a document identifier (spec §10).
+    "durable_objects": {
+        "bindings": [{ "name": "SEARCH_BUDGET", "class_name": "SearchBudget" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SearchBudget"] }],
+    // Declared rather than assumed. A search at the segment cap issues 500 provider calls in one
+    // invocation and, with the one retry §6.4 allows, up to 1,000; see
+    // `LIMITS.declaredSubrequestAllowance`. This key is honoured only on the standard usage model,
+    // so a Free-plan deploy fails here instead of failing at a reader's fiftieth subrequest.
+    "limits": { "cpu_ms": 30000, "subrequests": 1100 },
     "observability": {
         "enabled": true,
         "traces": {

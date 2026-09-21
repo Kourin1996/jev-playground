@@ -26,7 +26,7 @@ The example text is fictional and intended only for demonstrations.
 
 | Area                        | PoC requirement                                                                                                                                                                          |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Delivery                    | Standalone web app; no browser extension or Acrobat plugin                                                                                                                               |
+| Delivery                    | Standalone web app; no browser extension or Acrobat plugin. Deployment requires Workers Paid — see §9.1 and `README.md`                                                                  |
 | Documents                   | One PDF at a time                                                                                                                                                                        |
 | File limit                  | 10 MB and 50 physical pages                                                                                                                                                              |
 | Extracted content           | At most 200,000 characters and 2,000 searchable segments. The character limit is `maxPageCount × 4,000`, so the two move together                                                        |
@@ -332,6 +332,19 @@ POST /api/search
 
 Serve the frontend and Worker under one origin in production. The Vite development server may proxy `/api` to a local Worker.
 
+The endpoint is public and unauthenticated, so it is admitted before it is read:
+
+| Gate                                        | Refusal                                     | When                                       |
+| ------------------------------------------- | ------------------------------------------- | ------------------------------------------ |
+| Same origin, and exactly `application/json` | `400 invalid_request`                       | Before the body is read                    |
+| Per-client rate limit                       | `429 rate_limited` with `Retry-After`       | Before the body is read                    |
+| Declared and actual body size               | `413 request_body_too_large`                | While the body is arriving                 |
+| Provider capacity, sized from the batches   | `503 capacity_exhausted` with `Retry-After` | After validation, before any provider call |
+
+The media type is compared exactly rather than by substring: `text/plain` is a CORS-safelisted request content type, so a substring test would let any page post here from a visitor's browser with no preflight. No `Access-Control-Allow-Origin` is ever sent, and every `/api/` response carries `Cache-Control: no-store`.
+
+The client shows the refusal and does not retry automatically. A retry on `429` or `503` is the amplification the limits exist to prevent.
+
 ### 9.2 Request and response
 
 ```ts
@@ -388,12 +401,17 @@ The Worker validates:
 - unique, well-formed segment IDs;
 - at most 2,000 segments;
 - nonempty target text of at most 800 characters per segment;
-- aggregate extracted-text limits and a 1 MiB request-body limit, derived in §14.1;
+- context fields, each bounded by the same per-segment limit as the text — context _is_ a neighbouring segment's text, and unbounded it walked straight past the batch budget;
+- aggregate extracted-text limits over target text only, and a 4 MiB request-body limit over everything transmitted, derived in §14.1;
 - one valid Jev answer for every requested segment;
 - finite scores and values in their expected ranges;
 - probabilities summing to 1 within a documented floating-point tolerance.
 
 When a new search begins, abort the previous request when possible. Ignore responses whose `documentId` and `requestId` do not match current client state.
+
+The body-size limit is enforced **while the body arrives**, by counting bytes before retaining them and cancelling the stream above the limit — not by measuring a body that has already been buffered and parsed. The distinction is the whole point on a public endpoint: a limit applied after the allocation does not prevent the allocation.
+
+The provider budget lives in one Durable Object holding counters and expiring reservations. It never holds a query, a passage, or a document identifier. A reservation expires after one search deadline, so an invocation that dies cannot hold capacity.
 
 ## 10. Errors, privacy, and logging
 
@@ -405,6 +423,8 @@ When a new search begins, abort the previous request when possible. Ignore respo
 | A page appears to be multi-column | Name the page in the status bar and with an empty result; its text is still searched |
 | A declared limit is exceeded      | Stop before search and show the limit; never silently truncate                       |
 | Jev is unavailable                | Retry within the deadline, then show a search error                                  |
+| Too many searches from a client   | Refuse with the wait, and do not retry automatically                                 |
+| Provider capacity is committed    | Refuse with the wait, before any provider call is made                               |
 | Highlight mapping is unavailable  | Keep the result and report the display failure                                       |
 
 Keep credentials in Worker secrets or server-side environment variables:
@@ -633,7 +653,7 @@ are inside the C listing, the Poisson formula and the probability table, where t
 sentences to divide.
 
 **Capacity became a limit instead of a force.** `maxSegmentCount` is now `maxExtractedCharacters /
-typicalSegmentCharacters` = `50,000 / 100 = 500`, where 100 is the midpoint of the two medians
+typicalSegmentCharacters` = `200,000 / 100 = 2,000`, where 100 is the midpoint of the two medians
 above. A document that stays inside the character cap but divides far more finely is **rejected
 before search with its count named**, the way every other declared limit behaves. The two caps
 remain independent, both enforced before search (`check-limits.ts`, and again in the Worker), and
@@ -641,7 +661,9 @@ either can reject a document the other would admit.
 
 **What the cap costs elsewhere.** More units means more requests, and §14.19 forced the batch down
 from 8 passages to 4, which doubles them again. At the cap that is `ceil(2,000 / 4) = 500` requests
-at a concurrency of 16, so 32 rounds.
+at a concurrency of 24, so 21 rounds. That is also what `LIMITS.declaredSubrequestAllowance` and
+`wrangler.jsonc`'s `limits.subrequests` are derived from: 500 requests and the one retry §6.4
+allows is 1,000 subrequests in a single Worker invocation, against 50 on Workers Free.
 
 That is no longer checked by multiplying a per-request estimate. A 48-page fixture of 1,872 units —
 94% of the cap — was measured end to end at **7,148 / 7,330 / 7,390 ms**, which projects to about
@@ -657,12 +679,23 @@ Still unmeasured: the cap itself, and what happens when a request is rate-limite
 one retry.
 
 **Request size.** Each unit's text travels three times — as itself and as each neighbour's context
-— so the worst case is `3 × 50,000` characters. At 4 UTF-8 bytes each plus about 80 bytes of JSON
-per segment that is 640,000, so §9.3's body limit is 1 MiB. It was 256 KiB, which a full-size
-Japanese document exceeded on context duplication alone: the Worker answered
-`request_body_too_large` for a document the client had already accepted, and the reader saw a
-search error where a limit message belonged. No fixture is anywhere near the character cap, so no
-test caught it; `search-client.test.ts` now pins the arithmetic instead.
+— so the worst case is `3 × maxExtractedCharacters`, which is `3 × 200,000 = 600,000` characters.
+At 4 UTF-8 bytes each that is 2,400,000, plus about 80 bytes of JSON per segment at
+`maxSegmentCount`, which is 2,560,000 — so §9.3's body limit is **4 MiB**. The measured figure at
+48 pages is ~1.6 MB (§14.20), comfortably inside it.
+
+The limit has been raised twice, both times after it rejected a document the client had already
+accepted. It was 256 KiB, which a full-size Japanese document exceeded on context duplication
+alone; and this section went on saying 1 MiB long after the character cap moved from 50,000 to
+200,000, because the arithmetic above had not been redone — the code was right and three paragraphs
+of the canonical specification were not. No fixture is anywhere near the character cap, so no test
+caught either one; `search-client.test.ts` now pins the arithmetic instead.
+
+**Context is bounded, and separately.** Each context field is bounded by `maxSegmentCharacters`,
+like the text it is a copy of. It is deliberately **not** added to the `maxExtractedCharacters`
+aggregate: a document at exactly the character cap bills about three times it, so counting context
+there would reject a document the client had already accepted — the same failure, a third time.
+Raw bytes, target characters, context characters and provider tokens are four distinct limits.
 
 **Cost of the new shape.** Smaller units mean a highlight covers less text than before, which is
 the point, but also that a claim spread over two clauses is now split across two units and each is
@@ -738,9 +771,9 @@ Measured against the real provider after the §14.1 change, one search each:
 | Japanese contract sample (3 pages)      | 13    | 4        | 4,741             | 12,007 B     | 269 ms   |
 
 Billed characters run about 2.8× the extracted text, which is the context duplication. The body is
-3.1 bytes per character for English and 8.2 for Japanese; extrapolated to the 50,000-character cap
-that is roughly 410 KB of Japanese, which is why §9.3's body limit had to be 1 MiB rather than
-256 KiB (§14.1).
+3.1 bytes per character for English and 8.2 for Japanese; extrapolated to the 200,000-character cap
+that is roughly 1.6 MB of Japanese, which is why §9.3's body limit is 4 MiB (§14.1). §14.20
+measured 1.6 MB at 48 pages, so the extrapolation and the measurement agree.
 
 The Japanese sample's billed characters exceed its own text by more than context alone explains:
 its last request carries a padded state (§6.4), so four passages travel where one is asked about.
@@ -846,13 +879,20 @@ too, this is the line to change.
 
 Three modules the §12 tree has no place for:
 
+- `worker/http/read-body.ts`, `worker/http/same-origin.ts`, `worker/http/security-headers.ts` —
+  the §9.1 admission gates and response headers, kept pure of Workers runtime types like
+  `validate.ts` so they are unit testable;
+- `worker/admission/budget.ts`, `worker/admission/estimate-tokens.ts` and
+  `worker/admission/search-budget.ts` — the §9.1 provider budget, its estimate from §14.20's
+  measurements, and the Durable Object that holds it;
 - `src/lib/search/semantic-search.ts` — the client for `POST /api/search`, so the abort and
   staleness handling of §9.3 lives outside the components;
 - `src/lib/pdf/check-limits.ts` — the §2 and §10 limit checks;
 - `src/components/extracted-text-view.tsx` — the §3 debug view.
 
 `tests/` also gained `call-jev.test.ts`, `highlight.test.ts`, `search-client.test.ts`,
-`segment.test.ts`, `fuzz.test.ts`, `bitcoin.spec.ts`, `bitcoin-asset.spec.ts`, `limits.spec.ts`,
+`segment.test.ts`, `fuzz.test.ts`, `read-body.test.ts`, `admission.test.ts`, `bitcoin.spec.ts`,
+`bitcoin-asset.spec.ts`, `limits.spec.ts`, `api-hardening.spec.ts`,
 `helpers.ts`, `fixtures/text-items.ts`, and `run-evaluation.ts`.
 
 `tests/bitcoin-asset.spec.ts` targets `assets/bitcoin.pdf` rather than the byte-identical copy in

@@ -173,6 +173,16 @@ export const buildJevRequest = (model: string, query: string, batch: JevBatch): 
         };
     }
 
+    // Defence in depth again, and the last pure step before the provider is called.
+    // `maxCharactersPerBatch` had no enforcement anywhere once the packing stopped consulting it —
+    // it and `billedCharacters` were referenced only by tests, which asserted the bound the
+    // validator never applied. With context bounded in `validate.ts` this is unreachable
+    // (4 × 3 × 800 = 9,600 ≤ 10,000), which is exactly why a broken invariant should be loud.
+    const billed = batch.state.reduce((total, segment) => total + billedCharacters(segment), 0);
+    if (billed > LIMITS.maxCharactersPerBatch) {
+        throw new Error("Batch character budget exceeded");
+    }
+
     for (const segment of batch.evaluate) {
         const hasContext = segment.contextBefore !== undefined || segment.contextAfter !== undefined;
 

@@ -19,5 +19,14 @@
             "@/*": ["./src/*"]
         }
     },
-    "include": ["tests", "worker/search", "src/lib/types.ts", "playwright.config.ts", "vite.config.ts"]
+    "include": [
+        "tests",
+        "worker/admission/budget.ts",
+        "worker/admission/estimate-tokens.ts",
+        "worker/http",
+        "worker/search",
+        "src/lib/types.ts",
+        "playwright.config.ts",
+        "vite.config.ts"
+    ]
 }
