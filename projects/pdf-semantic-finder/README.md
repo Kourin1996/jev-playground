@@ -30,10 +30,11 @@ their prose were split line by line, so every answer arrived cut mid-sentence. E
 mechanism reaches the intended passage; not enough to calibrate the thresholds in `docs/spec.md`
 §7, which remain hypotheses.
 
-**Timing near the limits.** 280 segments and 70 requests completed in 2.0–2.5 s against a
-15-second deadline, over three runs.
+**Timing near the limits.** A 48-page document of 672 segments and 168 requests completed in
+2.8–3.1 s against a 15-second deadline, over three runs. At the 300% zoom maximum it holds 827 MB
+of canvas — measured, still usable, and the number that would decide any further page increase.
 
-**Not yet verified:** whether §7's thresholds sit in the right place, behaviour at the 500-segment
+**Not yet verified:** whether §7's thresholds sit in the right place, behaviour at the 1,000-segment
 cap itself, what a rate-limited retry costs inside the deadline, and whether a PDF's own text can
 steer a judgement.
 
@@ -48,7 +49,7 @@ remain in `docs/spec.md`; English is the canonical language.
 - PDF.js rendering, extraction, and source-position mapping
 - Local exact-text search
 - Meaning search through a Cloudflare Worker and TypeSafe AI Jev
-- One text-based PDF of up to 10 MB and 10 pages
+- One text-based PDF of up to 10 MB, 50 pages and 100,000 extracted characters
 - Up to three original-passage results with page navigation and highlighting
 - No OCR, generated answers, database, or persistent document storage
 

@@ -9,6 +9,7 @@ import type { Page } from "@playwright/test";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LIMITS } from "@/lib/types";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BLANK_PAGE = resolve(here, "fixtures/sample-blank-page-ja.pdf");
@@ -91,12 +92,14 @@ test.describe("declared limits", () => {
         await page.waitForFunction(() => document.querySelectorAll(".textLayer span").length > 50);
 
         // The document is still rendered and readable; only search is withheld.
-        await expect(page.locator(".pdf-finder-page")).toHaveCount(9);
+        await expect(page.locator(".pdf-finder-page")).toHaveCount(20);
         await expect(page.getByRole("button", { name: "View extracted text" })).toBeVisible();
 
-        // The limit is named with real numbers rather than a generic refusal.
+        // The limit is named with real numbers rather than a generic refusal, and the number comes
+        // from the code so raising the limit cannot leave this assertion quietly describing the
+        // old one.
         const message = page.locator("form p.text-error-primary");
-        await expect(message).toContainText("The limit is 50,000");
+        await expect(message).toContainText(`The limit is ${LIMITS.maxExtractedCharacters.toLocaleString("en-US")}`);
         await expect(message).toContainText("Search is unavailable for this document");
 
         await expect(page.getByLabel("Search query")).toBeDisabled();

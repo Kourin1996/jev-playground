@@ -7,17 +7,31 @@
 /** Declared PoC limits (spec §2 and §9.3). Enforced before search, never by truncating. */
 export const LIMITS = {
     maxFileBytes: 10 * 1024 * 1024,
-    maxPageCount: 10,
-    maxExtractedCharacters: 50_000,
+    /**
+     * Raised from 10 so a document of ordinary length can be opened. 50 pages at the character
+     * density below is what the 15-second deadline and the browser's memory will carry; see the
+     * §2 note in docs/spec.md for what stops it going further.
+     */
+    maxPageCount: 50,
+    /**
+     * Derived from the page limit, not chosen independently: `maxPageCount × 2,000`.
+     *
+     * 2,000 characters a page is the density of an ordinary Japanese document — measured against
+     * 3,853 on the deliberately dense fixture and 2,351 on the Bitcoin whitepaper. A page limit
+     * without a matching character limit is not a page limit at all: at the previous 50,000 a
+     * 50-page document had to average 1,000 characters a page to be accepted, so the ordinary case
+     * was rejected on characters and the page number meant nothing.
+     */
+    maxExtractedCharacters: 100_000,
     /**
      * Derived from the measured median unit size, not from an assumed one.
      *
-     * `maxExtractedCharacters / typicalSegmentCharacters` is `50,000 / 100 = 500`. See
+     * `maxExtractedCharacters / typicalSegmentCharacters` is `100,000 / 100 = 1,000`. See
      * `typicalSegmentCharacters` for where 125 comes from. A document that stays inside the
      * character cap but divides far more finely than that is rejected with its segment count
      * named, the way every other declared limit behaves — it is never re-merged to fit.
      */
-    maxSegmentCount: 500,
+    maxSegmentCount: 1_000,
     maxSegmentCharacters: 800,
     maxQueryCharacters: 200,
     /**
@@ -26,14 +40,14 @@ export const LIMITS = {
      *
      * Each segment's text travels three times — as itself, and as each neighbour's context — so
      * the worst case is `3 × maxExtractedCharacters` characters. At 4 UTF-8 bytes each (a
-     * surrogate pair such as 𠮟 counts as one character and four bytes) that is 600,000, plus
-     * about 80 bytes of JSON per segment at `maxSegmentCount`, which is 640,000.
+     * surrogate pair such as 𠮟 counts as one character and four bytes) that is 1,200,000, plus
+     * about 80 bytes of JSON per segment at `maxSegmentCount`, which is 1,280,000.
      *
      * This was 256 KiB, which a full-size Japanese document exceeded on context duplication
      * alone: the Worker answered `request_body_too_large` for a document the client had already
      * accepted. No test caught it because no fixture is anywhere near the character cap.
      */
-    maxRequestBodyBytes: 1024 * 1024,
+    maxRequestBodyBytes: 2 * 1024 * 1024,
     /**
      * Length below which a group is *considered* for merging into a neighbour.
      *
@@ -80,13 +94,16 @@ export const LIMITS = {
     /**
      * In-flight requests.
      *
-     * Raised with the batch size cut: at the segment cap this is `ceil(500 / 4) = 125` requests,
-     * so 16 rounds, leaving about 940 ms per round-trip inside `searchDeadlineMs`. A real search
-     * of 112 segments measured about 450 ms per round-trip, so that is roughly twofold headroom —
-     * but no document near the cap has been timed, and more concurrency means more chance of a
-     * rate-limited response spending its one retry.
+     * At the segment cap this is `ceil(1,000 / 4) = 250` requests, so 16 rounds, leaving about
+     * 940 ms per round-trip inside `searchDeadlineMs`. Measured round-trips are 450 ms on the
+     * English whitepaper and 270 ms on a dense Japanese document, so that is roughly twofold
+     * headroom. Raised from 8 when the page limit went to 50: at 8 the same cap would need 32
+     * rounds and 470 ms each, which the measurements do not support.
+     *
+     * The provider allows 1,200 requests a minute, and a search at the cap issues 250 over about
+     * seven seconds — within the limit alone, but two such searches at once approach it.
      */
-    maxConcurrentRequests: 8,
+    maxConcurrentRequests: 16,
     searchDeadlineMs: 15_000,
     maxResults: 3,
 } as const;

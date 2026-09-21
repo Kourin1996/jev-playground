@@ -44,7 +44,7 @@ Copied pdfjs-dist 6.3.289 runtime assets into public/pdfjs/
 npm run fixtures:sample
 ```
 
-This writes eight PDFs into `tests/fixtures/`. `sample-contract-ja.pdf` is the one most tests use. Five cover the limit and layout behaviour of spec §10 and §2: `sample-blank-page-ja.pdf` (page 2 carries no text), `sample-over-limit-ja.pdf` (nine pages, past the character cap), `sample-encrypted.pdf` (password protected), `sample-no-text.pdf` (nothing extractable) and `sample-two-column-ja.pdf` (side-by-side columns). Two are for measurement rather than behaviour: `eval-terms-ja.pdf` is the §11.1 evaluation subject, written so that nothing in this implementation was tuned against it, and `sample-near-limit-ja.pdf` is 10 pages and 280 segments — inside every declared limit and close enough to them to time a near-capacity search.
+This writes eight PDFs into `tests/fixtures/`. `sample-contract-ja.pdf` is the one most tests use. Five cover the limit and layout behaviour of spec §10 and §2: `sample-blank-page-ja.pdf` (page 2 carries no text), `sample-over-limit-ja.pdf` (nine pages, past the character cap), `sample-encrypted.pdf` (password protected), `sample-no-text.pdf` (nothing extractable) and `sample-two-column-ja.pdf` (side-by-side columns). Two are for measurement rather than behaviour: `eval-terms-ja.pdf` is the §11.1 evaluation subject, written so that nothing in this implementation was tuned against it, and `sample-near-limit-ja.pdf` is 48 pages and 672 segments — inside every declared limit and close to both, so it times a near-capacity search.
 
 It is **a development aid, not an acceptance fixture.** The three fictional PDFs that spec §11.1
 requires, and the 20-query evaluation set that goes with them, are still outstanding — see
@@ -159,7 +159,7 @@ With the two-result search from above still showing:
 | -------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------- |
 | Exact mode issues no request                       | DevTools → Network, filter `search`, run an exact search          | No request to `/api/search`                                      |
 | Replacing the PDF clears state                     | Open the PDF again while results are showing                      | Results, highlight, and the disclosure acknowledgement all reset |
-| A page count over the limit stops the load         | Open a PDF of more than 10 pages                                  | `This PDF has N pages. The limit is 10.`                         |
+| A page count over the limit stops the load         | Open a PDF of more than 50 pages                                  | `This PDF has N pages. The limit is 50.`                         |
 | An oversized drop is reported                      | Drag a PDF larger than 10 MB onto the drop zone                   | `This PDF is N MB. The limit is 10 MB.`                          |
 | A non-PDF drop is reported                         | Drag a text file onto the drop zone                               | `Only PDF files can be opened.`                                  |
 | A non-PDF chosen through the button is reported    | With a document already open, use **Open PDF** and pick a non-PDF | `This file could not be read as a PDF.`                          |
@@ -246,15 +246,16 @@ outside the project, and those found a defect four rounds of in-house tests had 
 whose figures outnumber their prose were being split line by line, so every answer arrived cut
 mid-sentence.
 
-Timing near the limits is covered by `sample-near-limit-ja.pdf`: 280 segments, 70 requests, and
-about 2.0–2.5 s against a 15-second deadline over three runs.
+Timing near the limits is covered by `sample-near-limit-ja.pdf`: 48 pages, 672 segments, 168
+requests, and about 2.8–3.1 s against a 15-second deadline over three runs. Zoom it to 300% and
+check it stays usable — 48 pages hold 827 MB of canvas there, which is what bounds the page limit.
 
 These remain outstanding, and none has a local substitute.
 
 | Not verifiable                                      | Blocked on                                                                                                                |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Whether §7's thresholds are in the right place      | A set with enough queries whose answers sit near 0.35 and 0.65, and a document written by someone other than this project |
-| Behaviour at the 500-segment cap itself             | No fixture reaches it; `sample-near-limit-ja.pdf` stops at 280                                                            |
+| Behaviour at the 1,000-segment cap itself           | No fixture reaches it; `sample-near-limit-ja.pdf` stops at 672                                                            |
 | What a rate-limited retry costs inside the deadline | It has never been observed; the retry path is covered only by unit tests with an injected clock                           |
 | Whether a PDF's own text can steer a judgement      | Not attempted. `docs/spec.md` §14.19 measures ordinary passages sharing a state, which is a different problem             |
 

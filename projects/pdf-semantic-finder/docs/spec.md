@@ -28,14 +28,26 @@ The example text is fictional and intended only for demonstrations.
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | Delivery                    | Standalone web app; no browser extension or Acrobat plugin                                                                           |
 | Documents                   | One PDF at a time                                                                                                                    |
-| File limit                  | 10 MB and 10 physical pages                                                                                                          |
-| Extracted content           | At most 50,000 characters and 500 searchable segments                                                                                |
+| File limit                  | 10 MB and 50 physical pages                                                                                                          |
+| Extracted content           | At most 100,000 characters and 1,000 searchable segments. The character limit is `maxPageCount × 2,000`, so the two move together    |
 | Supported PDFs              | Extractable text, horizontal writing, single-column layout; a page that appears to be multi-column is reported, not silently trusted |
 | Primary evaluation language | Japanese                                                                                                                             |
 | Search unit                 | A paragraph or short group of lines, called a segment                                                                                |
 | Results                     | Up to three results ordered by relevance                                                                                             |
 | Highlighting                | The complete selected segment for a meaning result; exact search highlights the matched characters                                   |
 | Persistence                 | PDF bytes, text, mappings, and results remain in browser memory only                                                                 |
+
+The page limit and the character limit are derived from one another: 2,000 characters a page is the
+density of an ordinary Japanese document, measured against 3,853 on a deliberately dense fixture and
+2,351 on the Bitcoin whitepaper. A page limit without a matching character limit is not a page limit
+— at 50 pages and 50,000 characters a document had to average 1,000 characters a page to be
+accepted, so the ordinary case was rejected on characters and the page number meant nothing.
+
+**What stops it going further than 50.** Not the API bill, which is $0.03 a search at the cap
+(§14.20). The viewer renders every page eagerly, so 50 pages hold 92 MB of canvas at 100% zoom and
+827 MB at the 300% maximum — measured, and the document stayed usable, but it is the number that
+would decide any further increase. Beyond that the 15-second deadline binds: 100 pages of dense
+Japanese would need about 700 requests and 24 seconds.
 
 ### Out of scope
 
@@ -237,7 +249,7 @@ The example model is pinned for reproducible PoC evaluation. Confirm its availab
 | ------------------------ | ----------------------------------------------------------- |
 | Passages per Jev request | Exactly 4, or the whole document when it has fewer          |
 | Text per batch           | At most 10,000 characters including context                 |
-| Concurrent Jev requests  | At most 8 (see §14.1 for the arithmetic against the cap)    |
+| Concurrent Jev requests  | At most 16 (see §14.1 for the arithmetic against the cap)   |
 | Whole-search deadline    | 15 seconds                                                  |
 | Automatic retry          | Once for a transient failure, within the same deadline      |
 | Partial batch failure    | Fail the search; never treat partial evaluation as no match |
@@ -340,7 +352,7 @@ The Worker validates:
 
 - a nonempty query of at most 200 characters;
 - unique, well-formed segment IDs;
-- at most 500 segments;
+- at most 1,000 segments;
 - nonempty target text of at most 800 characters per segment;
 - aggregate extracted-text limits and a 1 MiB request-body limit, derived in §14.1;
 - one valid Jev answer for every requested segment;
@@ -592,17 +604,18 @@ remain independent, both enforced before search (`check-limits.ts`, and again in
 either can reject a document the other would admit.
 
 **What the cap costs elsewhere.** More units means more requests, and §14.19 forced the batch down
-from 8 passages to 4, which doubles them again. At the cap that is `ceil(500 / 4) = 125` requests;
-`maxConcurrentRequests` rose from 5 to 8, so 16 rounds, leaving about 940 ms per round-trip inside
-the 15 s deadline. A real search of the 86-unit whitepaper took 22 requests and 1,055 ms — 3 rounds,
-so about 350 ms each — which is the measurement the arithmetic is checked against.
+from 8 passages to 4, which doubles them again. At the cap that is `ceil(1,000 / 4) = 250`
+requests; `maxConcurrentRequests` is 16, so 16 rounds, leaving about 940 ms per round-trip inside
+the 15 s deadline. Measured round-trips are 450 ms on the English whitepaper and 270 ms on a dense
+Japanese document, which is what the arithmetic is checked against — at 8 concurrent the same cap
+would need 32 rounds and 470 ms each, which the measurements do not support.
 
-**Measured near the cap.** `tests/fixtures/sample-near-limit-ja.pdf` — 10 pages, 280 units, inside
-every declared limit — produces 70 requests and completed in **2,503 / 2,318 / 2,063 ms** over three
-runs, all well inside the 15-second deadline. That is 9 rounds at concurrency 8, so roughly 250 ms
-per round-trip, consistent with the 350 ms measured on the whitepaper.
+**Measured near the cap.** `tests/fixtures/sample-near-limit-ja.pdf` — **48 pages, 672 units**,
+inside every declared limit and close to both — produces 168 requests and completed in
+**3,144 / 2,763 / 2,851 ms** over three runs, all well inside the 15-second deadline. Extraction
+took 298 ms.
 
-Still unmeasured: a document at the 500-unit cap itself, and what happens when a request is
+Still unmeasured: a document at the 1,000-unit cap itself, and what happens when a request is
 rate-limited and spends its one retry.
 
 **Request size.** Each unit's text travels three times — as itself and as each neighbour's context
@@ -991,3 +1004,38 @@ than sleeping first.
 
 Reproduced with throwaway scripts, not committed ones: they send document text to TypeSafe AI and
 are not something `npm test` should do.
+
+### 14.20 What a search costs, and what decided the 50-page limit
+
+Measured against the real provider, one search each, at the limits in force at the time:
+
+| Document                   | Characters | Units | Requests | Input tokens | Output |  Elapsed |
+| -------------------------- | ---------: | ----: | -------: | -----------: | -----: | -------: |
+| `assets/bitcoin.pdf`, 9 pp |     21,155 |    86 |       22 |       45,440 |  2,066 | 1,338 ms |
+| Japanese contract, 3 pp    |      1,469 |    13 |        4 |       10,542 |    315 |   234 ms |
+| Near-limit Japanese, 48 pp |     92,000 |   672 |      168 |      541,632 | 16,128 | 2,851 ms |
+
+TypeSafe AI charges **$42 per billion input tokens and nothing for output**, so a search at the
+1,000-unit cap costs about **$0.03**. Money is not what bounds this product.
+
+**Where the input goes.** A four-passage request measured 3,092 input tokens on dense Japanese:
+2,048 for the state and 1,044 for the four instruction strings, which is 261 tokens a question.
+Within the state each passage's text travels three times — itself plus two neighbours' context —
+so the context is roughly 44% of the input. Raising `maxSegmentsPerBatch` to 8 would halve the
+instruction share and cut input tokens by about a quarter, and §14.19 is the reason it is 4: the
+saving would be paid for in the judgement.
+
+**What actually bounds the page limit.** Measured at 48 pages:
+
+| Constraint            | At 48 pages                    | Headroom                                   |
+| --------------------- | ------------------------------ | ------------------------------------------ |
+| Search deadline       | 2.9 s against 15 s             | Comfortable                                |
+| Request body          | ~1.1 MB against 2 MiB          | Comfortable                                |
+| Canvas memory at 100% | 92 MB                          | Fine                                       |
+| Canvas memory at 300% | **827 MB**                     | Measured, still usable, and the real bound |
+| Provider request rate | 168 requests, 1,200/min budget | One search is fine; three at once are not  |
+
+The viewer renders every page eagerly — no virtualisation — and canvas memory grows with the
+square of the zoom. That is what would have to change before the page limit went further, not the
+bill and not the deadline. For reference, 100 pages of dense Japanese was estimated at about 700
+requests, 24 seconds and 1.7 GB of canvas at maximum zoom.

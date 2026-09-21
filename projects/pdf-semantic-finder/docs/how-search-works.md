@@ -440,10 +440,11 @@ Characters no longer force a smaller batch. `maxCharactersPerBatch` is derived �
 9,600`, and the limit is 10,000 — so the count is what binds and every state really is the same
 size. The old 6,000 was below `8 × 800`, which is why packing used to put characters first.
 
-At most eight requests run concurrently, under a single 15-second deadline for the whole search. At
-the 500-segment cap that is `ceil(500 / 4) = 125` requests and so 16 rounds, leaving about 940 ms
-per round-trip. A real search of the 86-unit whitepaper took 22 requests in 1,055 ms — 3 rounds, so
-about 350 ms each. A 280-unit document near the limits took 70 requests and 2.0–2.5 s.
+At most sixteen requests run concurrently, under a single 15-second deadline for the whole search.
+At the 1,000-segment cap that is `ceil(1,000 / 4) = 250` requests and so 16 rounds, leaving about
+940 ms per round-trip. A real search of the 86-unit whitepaper took 22 requests in 1,055 ms — 3
+rounds, so about 350 ms each. A 672-unit document of 48 pages, near both limits, took 168 requests
+and 2.8–3.1 s.
 
 **It does not make the scale one thing, and an earlier version of this document claimed it did.**
 Holding the count at four and varying only what else differs between requests, the §7 verdict for

@@ -22,7 +22,13 @@ const STYLE = (fontSize, lineHeight, margin) =>
 
 const html = (style, body) => `<!doctype html><html lang="ja"><head><meta charset="utf-8"><style>${style}</style></head><body>${body}</body></html>`;
 
-/** A page whose text is dense enough to push the document past the character cap. */
+/**
+ * A page whose text is dense enough to push the document past the character cap.
+ *
+ * Twenty of these come to roughly 125,000 characters against a 100,000 limit. The margin is wide
+ * on purpose: this fixture stopped being over the limit the moment the limit was raised, and the
+ * test that depends on it failed rather than the fixture announcing itself.
+ */
 const densePage = (index) => {
     const clause = "本条に定める事項について、甲および乙は誠実に協議のうえこれを決定するものとし、協議が調わない場合には別途定める手続によるものとする。";
     const paragraphs = Array.from({ length: 45 }, (_, n) => `<p>第${index * 45 + n + 1}項 ${clause}${clause}</p>`).join("");
@@ -39,7 +45,7 @@ const densePage = (index) => {
  */
 const nearLimitPage = (index) => {
     const sentence = "本条に定める事項について、甲および乙は誠実に協議のうえこれを決定するものとし、協議が調わない場合には別途定める手続によるものとする。";
-    const paragraphs = Array.from({ length: 28 }, (_, n) => `<p>第${index * 28 + n + 1}条　${sentence}${sentence}</p>`).join("");
+    const paragraphs = Array.from({ length: 14 }, (_, n) => `<p>第${index * 14 + n + 1}条　${sentence}${sentence}</p>`).join("");
     return `<div class="${index === 0 ? "" : "pb"}">${paragraphs}</div>`;
 };
 
@@ -96,7 +102,7 @@ const DOCUMENTS = [
     {
         // Spec §10: over a declared limit, the document still renders but search is blocked.
         name: "sample-over-limit-ja.pdf",
-        source: async () => html(STYLE("5pt", "1.15", "8mm"), Array.from({ length: 9 }, (_, i) => densePage(i)).join("")),
+        source: async () => html(STYLE("5pt", "1.15", "8mm"), Array.from({ length: 20 }, (_, i) => densePage(i)).join("")),
     },
     {
         /*
@@ -113,9 +119,13 @@ const DOCUMENTS = [
          * A document just inside every declared limit, for timing a near-capacity search. The
          * §6.4 deadline arithmetic has only ever been checked against documents a fraction of the
          * size, so it is the one number the limits rest on that nothing measures.
+         *
+         * 48 pages at about 1,900 characters each approaches both limits at once, which is the
+         * point: the page limit and the character limit are derived from one another, so a fixture
+         * near one and far from the other tests neither.
          */
         name: "sample-near-limit-ja.pdf",
-        source: async () => html(STYLE("7pt", "1.4", "12mm"), Array.from({ length: 10 }, (_, index) => nearLimitPage(index)).join("")),
+        source: async () => html(STYLE("7pt", "1.4", "12mm"), Array.from({ length: 48 }, (_, index) => nearLimitPage(index)).join("")),
     },
     {
         /*
