@@ -17,7 +17,9 @@ const OVER_LIMIT = resolve(here, "fixtures/sample-over-limit-ja.pdf");
 const ENCRYPTED = resolve(here, "fixtures/sample-encrypted.pdf");
 const NO_TEXT = resolve(here, "fixtures/sample-no-text.pdf");
 const TWO_COLUMN = resolve(here, "fixtures/sample-two-column-ja.pdf");
-const ALL = [BLANK_PAGE, OVER_LIMIT, ENCRYPTED, NO_TEXT, TWO_COLUMN];
+const TOO_MANY_PAGES = resolve(here, "fixtures/sample-too-many-pages-ja.pdf");
+const DENSE = resolve(here, "fixtures/sample-dense-ja.pdf");
+const ALL = [BLANK_PAGE, OVER_LIMIT, ENCRYPTED, NO_TEXT, TWO_COLUMN, TOO_MANY_PAGES, DENSE];
 
 test("the limit fixtures are present", () => {
     const missing = ALL.filter((path) => !existsSync(path));
@@ -116,6 +118,42 @@ test.describe("declared limits", () => {
             .catch(() => undefined);
         await page.waitForTimeout(800);
         expect(requested).toBe(false);
+    });
+
+    test("refuses a document over the page limit, and renders none of it", async ({ page }) => {
+        // The page-count path had no fixture at all until now: every existing one is inside the
+        // page limit and over some other one. This document is 1,000 pages.
+        await page.goto("/");
+        await page.setInputFiles('input[type="file"]', TOO_MANY_PAGES);
+
+        const message = page.locator("p.text-error-primary");
+        await expect(message).toContainText(`The limit is ${LIMITS.maxPageCount}`);
+        await expect(message).toContainText("1000 pages");
+
+        // Not "rendered but unsearchable", as an over-character document is: nothing is opened,
+        // so the drop zone is still the only thing on screen.
+        await expect(page.locator(".pdf-finder-page")).toHaveCount(0);
+        await expect(page.locator("[data-dropzone]")).toBeVisible();
+        await expect(page.getByLabel("Search query")).toBeDisabled();
+    });
+
+    test("stops reading a document that carries more text than the extraction ceiling", async ({ page }) => {
+        // Inside the page limit — 48 pages — and over a million characters, because a page limit
+        // says nothing about how much text one page may hold. Extraction stops partway, and the
+        // reader is told that what they can see is incomplete rather than being shown a partial
+        // extraction as though it were the document.
+        await page.goto("/");
+        await page.setInputFiles('input[type="file"]', DENSE);
+        await page.waitForSelector(".pdf-finder-page");
+
+        const message = page.locator("form p.text-error-primary");
+        await expect(message).toContainText("Extraction stopped at page");
+        await expect(message).toContainText("the extracted text is incomplete");
+        await expect(message).toContainText("Search is unavailable");
+
+        // Rendered and readable, like every other over-limit document (spec §10).
+        await expect(page.locator(".pdf-finder-page").first()).toBeVisible();
+        await expect(page.getByLabel("Search query")).toBeDisabled();
     });
 
     test("stops loading a password-protected document and gives the reason", async ({ page }) => {

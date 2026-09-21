@@ -16,9 +16,9 @@ import { SearchBar } from "@/components/search-bar";
 import { SearchResults } from "@/components/search-results";
 import { buildSegments } from "@/lib/pdf/build-segments";
 import type { LimitViolation } from "@/lib/pdf/check-limits";
-import { checkFileLimits, checkPageLimits, checkSegmentLimits, describeLimitViolation } from "@/lib/pdf/check-limits";
+import { checkFileLimits, checkSegmentLimits, describeLimitViolation } from "@/lib/pdf/check-limits";
 import type { PdfExtraction } from "@/lib/pdf/extract-text";
-import { extractPdfText } from "@/lib/pdf/extract-text";
+import { PageCountExceededError, extractPdfText } from "@/lib/pdf/extract-text";
 import type { HighlightTargetFailure } from "@/lib/pdf/highlight";
 import { buildPageIndexes } from "@/lib/pdf/page-index";
 import type { PageIndex } from "@/lib/pdf/page-index";
@@ -155,6 +155,8 @@ export const PdfWorkspace = () => {
     const currentDocumentIdRef = useRef<string>("");
     const currentRequestIdRef = useRef<string>("");
     const abortRef = useRef<AbortController | null>(null);
+    /** Separate from the search controller: opening a document and searching it are cancelled apart. */
+    const loadAbortRef = useRef<AbortController | null>(null);
 
     const resetSearchState = useCallback(() => {
         setIsSearching(false);
@@ -171,6 +173,16 @@ export const PdfWorkspace = () => {
 
     const openDocument = useCallback(
         async (file: File) => {
+            // Claimed before the first await, so a second file chosen while this one is loading
+            // supersedes it from the very beginning rather than from wherever the first suspension
+            // point happens to be.
+            const documentId = crypto.randomUUID();
+            currentDocumentIdRef.current = documentId;
+
+            loadAbortRef.current?.abort();
+            const loadController = new AbortController();
+            loadAbortRef.current = loadController;
+
             abortRef.current?.abort();
             abortRef.current = null;
             currentRequestIdRef.current = "";
@@ -183,9 +195,6 @@ export const PdfWorkspace = () => {
 
             if (previous !== null) await previous.extraction.destroy().catch(() => undefined);
 
-            const documentId = crypto.randomUUID();
-            currentDocumentIdRef.current = documentId;
-
             const extractionStartedAt = performance.now();
 
             try {
@@ -196,17 +205,13 @@ export const PdfWorkspace = () => {
                     return;
                 }
 
-                const extraction = await extractPdfText(new Uint8Array(await file.arrayBuffer()));
+                // The signal is what actually stops the work: without it a superseded load ran to
+                // completion and was then thrown away, which on a large document is the entire
+                // cost of opening it paid twice.
+                const extraction = await extractPdfText(new Uint8Array(await file.arrayBuffer()), { signal: loadController.signal });
                 // The document was replaced while this one was loading.
                 if (currentDocumentIdRef.current !== documentId) {
                     await extraction.destroy().catch(() => undefined);
-                    return;
-                }
-
-                const pageViolations = checkPageLimits(extraction.pageCount);
-                if (pageViolations.length > 0) {
-                    await extraction.destroy().catch(() => undefined);
-                    setLoadError(describeLimitViolation(pageViolations[0]));
                     return;
                 }
 
@@ -228,14 +233,32 @@ export const PdfWorkspace = () => {
                     extractionMs: Math.round(performance.now() - extractionStartedAt),
                 });
             } catch (error) {
+                // Guarded like the success path: a rejection from a superseded load must not
+                // replace the message belonging to the document now on screen.
+                if (currentDocumentIdRef.current !== documentId) return;
+                if ((error as Error | undefined)?.name === "AbortError") return;
+
+                if (error instanceof PageCountExceededError) {
+                    setLoadError(describeLimitViolation(error.violation));
+                    return;
+                }
+
                 const name = (error as Error | undefined)?.name ?? "Error";
                 setLoadError(LOAD_ERROR_TEXT[name] ?? "This PDF could not be opened.");
             } finally {
-                setIsLoading(false);
+                if (currentDocumentIdRef.current === documentId) setIsLoading(false);
             }
         },
         [loaded, resetSearchState],
     );
+
+    /** Stops loading the document currently being opened, so a slow import can be abandoned. */
+    const cancelLoad = useCallback(() => {
+        loadAbortRef.current?.abort();
+        loadAbortRef.current = null;
+        currentDocumentIdRef.current = "";
+        setIsLoading(false);
+    }, []);
 
     const runSearch = useCallback(
         async (searchMode: SearchMode) => {
@@ -452,7 +475,18 @@ export const PdfWorkspace = () => {
     }, []);
 
     const limitMessage = useMemo(() => {
-        if (loaded === null || loaded.limitViolations.length === 0) return undefined;
+        if (loaded === null) return undefined;
+
+        // Extraction gave up partway. The document is far over the character limit and could not be
+        // searched in any case, but the text that exists is partial and saying so is the point: an
+        // incomplete extraction presented as the whole document is the one thing spec §10 forbids
+        // outright.
+        const stoppedAt = loaded.extraction.extractionStoppedAtPage;
+        if (stoppedAt !== undefined) {
+            return `This PDF carries more text than can be read. Extraction stopped at page ${stoppedAt}, so the extracted text is incomplete. Search is unavailable for this document.`;
+        }
+
+        if (loaded.limitViolations.length === 0) return undefined;
         return `${describeLimitViolation(loaded.limitViolations[0])} Search is unavailable for this document.`;
     }, [loaded]);
 
@@ -603,7 +637,17 @@ export const PdfWorkspace = () => {
                         {loaded === null ? (
                             <div className="flex flex-1 items-center justify-center p-8">
                                 {isLoading ? (
-                                    <p className="text-sm text-tertiary">Opening the document…</p>
+                                    <div className="flex flex-col items-center gap-3">
+                                        <p className="text-sm text-tertiary">Opening the document…</p>
+                                        {/*
+                                         * A large PDF takes real time to extract, and until now the
+                                         * only way out was to reload the page. Cancelling stops the
+                                         * work rather than hiding it.
+                                         */}
+                                        <Button size="sm" color="tertiary" onClick={cancelLoad}>
+                                            Cancel
+                                        </Button>
+                                    </div>
                                 ) : (
                                     <div className="w-full max-w-120">
                                         <FileUploadDropZone

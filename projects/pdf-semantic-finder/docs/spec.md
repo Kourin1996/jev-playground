@@ -433,6 +433,9 @@ The provider budget lives in one Durable Object holding counters and expiring re
 | Some pages have no text           | Identify excluded pages and search only extracted pages                              |
 | A page appears to be multi-column | Name the page in the status bar and with an empty result; its text is still searched |
 | A declared limit is exceeded      | Stop before search and show the limit; never silently truncate                       |
+| Page count above the limit        | Reject before reading any page's text; nothing is rendered                           |
+| More text than extraction reads   | Stop extracting, keep the document readable, and say the extracted text is partial   |
+| A slow document is being opened   | Offer to cancel; cancelling stops the work rather than hiding it                     |
 | Jev is unavailable                | Retry within the deadline, then show a search error                                  |
 | Too many searches from a client   | Refuse with the wait, and do not retry automatically                                 |
 | Provider capacity is committed    | Refuse with the wait, before any provider call is made                               |
@@ -1225,3 +1228,31 @@ This also made two long-standing inconsistencies visible, which is the usual ret
 boundary: the unit fixtures described a one-segment request answered with `total: 12`, and the
 end-to-end mocks answered a streamed endpoint with a bare JSON object carrying no `type` at all.
 Both had been passing for as long as they had existed.
+
+### 14.23 Rejecting a document before reading it, and the ceiling that bounds the reading
+
+The page count was checked after every page had been extracted. A file claiming a thousand pages
+was therefore parsed in full and then discarded. The check now happens the moment the document
+opens.
+
+**Measured, because the review described this as a resource risk and it is worth knowing the real
+size of it:** a 1,000-page document is rejected in 354 ms instead of 828 ms. Under half a second of
+avoidable work, not the seconds the framing suggested. The change is still right — doing work you
+will throw away is not defensible on a public endpoint — but it is a tidy-up, not a mitigation.
+
+**A page limit does not bound the text.** Nothing says how much a single page may hold, and a
+document of 48 pages at 2pt carries over a million characters. Extraction therefore stops at four
+times `maxExtractedCharacters`, far past anything that could be accepted and far short of anything
+that would hurt the browser. Such a document is still rendered and readable — §10 requires that of
+every over-limit document — but the extraction is partial, and the reader is told so rather than
+being shown part of a document as though it were the whole of it.
+
+`tests/fixtures/sample-too-many-pages-ja.pdf` and `sample-dense-ja.pdf` are the two cases. Neither
+existed before: every other fixture is inside the page limit and over some other one, so the
+page-count path had never been exercised at all.
+
+**Cleanup and cancellation.** `extractPdfText` accepted an abort signal that the workspace never
+passed, so a superseded load ran to completion and was thrown away; and a failure partway left the
+PDF.js loading task alive with nobody to release it. Both are fixed, the document generation is
+claimed before the first `await` rather than after it, and a slow import can be cancelled instead of
+waited out.

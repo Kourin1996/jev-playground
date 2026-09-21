@@ -34,6 +34,9 @@ const maxExtractedCharacters = Number(
     /maxExtractedCharacters: ([\d_]+)/u.exec(await readFile(resolve(here, "../src/lib/types.ts"), "utf8"))[1].replaceAll("_", ""),
 );
 
+/** The declared page limit, read from the same source as the character limit. */
+const LIMITS_PAGE_COUNT = Number(/maxPageCount: ([\d_]+)/u.exec(await readFile(resolve(here, "../src/lib/types.ts"), "utf8"))[1].replaceAll("_", ""));
+
 /** Characters one `densePage` produces, measured: 45 paragraphs of about 137 characters. */
 const DENSE_PAGE_CHARACTERS = 6_200;
 
@@ -162,6 +165,60 @@ const DOCUMENTS = [
                 `<div class="col">${column("左")}</div><div class="col">${column("右")}</div>`,
             );
         },
+    },
+    {
+        /*
+         * One page past the page cap, and dense, so rejecting it costs almost nothing while
+         * extracting it would cost plenty.
+         *
+         * The page count is now checked the moment the document opens, before any page's text is
+         * read. Before that it was checked after every page had been extracted, so a compact file
+         * claiming thousands of pages was fully parsed and then discarded. This fixture is what
+         * makes the difference observable: the same pages the over-limit fixture uses, one past
+         * the limit.
+         */
+        name: "sample-too-many-pages-ja.pdf",
+        source: async () =>
+            html(
+                STYLE("9pt", "1.4", "12mm"),
+                // Sparse pages, so the file stays small, and a great many of them, so the cost of
+                // extracting them is dominated by the per-page round trip to the PDF.js worker.
+                // That is what makes the ordering observable: rejecting on the page count is
+                // constant work, extracting first is a thousand round trips.
+                Array.from(
+                    { length: 1_000 },
+                    (_, index) => `<p class="${index === 0 ? "" : "pb"}">第${index + 1}項 本条に定める事項について協議する。</p>`,
+                ).join(""),
+            ),
+    },
+    {
+        /*
+         * A document that stays inside the page cap and still carries more text than extraction
+         * will read.
+         *
+         * The page cap says nothing about how much text one page may hold. This is 48 pages at
+         * about 25,000 characters each — over a million in total, against a 200,000 limit — and
+         * extraction gives up around page 38. That is what the ceiling exists for: a page limit
+         * alone does not bound the work, and a public release cannot assume documents are
+         * reasonable. Measured, not assumed; `limits.spec.ts` pins the behaviour rather than the
+         * exact page it stops on, which depends on how the text happens to flow.
+         */
+        name: "sample-dense-ja.pdf",
+        source: async () =>
+            html(
+                '@page{size:A4;margin:4mm}body{font-family:"Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif;font-size:2pt;line-height:1.02}p{margin:0;text-align:justify}.pb{page-break-before:always}',
+                Array.from(
+                    { length: 24 },
+                    (_, index) =>
+                        `<div class="${index === 0 ? "" : "pb"}">` +
+                        Array.from(
+                            { length: 600 },
+                            (_, n) =>
+                                `<p>第${index * 600 + n + 1}項 本条に定める事項について、甲および乙は誠実に協議のうえこれを決定するものとし、協議が調わない場合には別途定める手続によるものとする。</p>`,
+                        ).join("") +
+                        `</div>`,
+                ).join(""),
+            ),
     },
     {
         /*

@@ -11,6 +11,9 @@
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import type { PDFDocumentProxy, TextContent, TextItem } from "pdfjs-dist/types/src/display/api";
+import { checkPageLimits } from "@/lib/pdf/check-limits";
+import type { LimitViolation } from "@/lib/pdf/check-limits";
+import { LIMITS } from "@/lib/types";
 import type { ExtractedLine, LinePiece, TextItemLike } from "@/lib/types";
 
 // Imported rather than copied, so the worker can never drift from the library version.
@@ -79,6 +82,13 @@ export type PdfExtraction = {
     /** Pages whose text splits into side-by-side blocks, which spec §2 does not claim to support. */
     multiColumnPages: number[];
     totalCharacters: number;
+    /**
+     * Set when extraction gave up partway, and at which page.
+     *
+     * Such a document is far over the character limit and cannot be searched anyway, but the
+     * extraction that exists is partial and must never be presented as the whole document.
+     */
+    extractionStoppedAtPage?: number;
 };
 
 const CJK_PATTERN = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}　-〿＀-￯]/u;
@@ -302,25 +312,85 @@ export type ExtractPdfOptions = {
 };
 
 /**
+ * A document rejected before its text was read, so the caller can report the limit rather than a
+ * failure.
+ *
+ * It carries the violation itself, so the message is produced by `describeLimitViolation` like
+ * every other limit rather than reassembled at the call site.
+ */
+export class PageCountExceededError extends Error {
+    constructor(readonly violation: LimitViolation) {
+        super("Page count exceeds the declared limit");
+        this.name = "PageCountExceededError";
+    }
+}
+
+/**
+ * How much text is read before extraction gives up.
+ *
+ * A document over the character limit is still rendered and readable, with only search withheld
+ * (spec §10), so extraction cannot simply stop at the limit. What it must not do is read without
+ * bound: the page cap says nothing about how much text one page may hold, and a single page can
+ * carry millions of characters. Four times the limit is far past any document that could be
+ * accepted and far short of anything that would hurt the browser.
+ */
+const EXTRACTION_CHARACTER_CEILING = LIMITS.maxExtractedCharacters * 4;
+
+/**
  * Loads a PDF and extracts every page's text.
  *
- * The caller owns the result and must call `destroy()` when it is finished with it.
+ * The caller owns the result and must call `destroy()` when it is finished with it. Every failure
+ * path destroys the loading task itself, because a rejected `getPage` would otherwise leave the
+ * worker holding the document with nobody left to release it.
  */
 export const extractPdfText = async (bytes: Uint8Array, options: ExtractPdfOptions = {}): Promise<PdfExtraction> => {
     // `getDocument` transfers ownership of the buffer to the worker and detaches it here, so the
     // caller's copy must not be reused afterwards.
     const loadingTask = getDocument({ data: bytes, ...ASSET_URLS });
 
-    options.signal?.addEventListener("abort", () => void loadingTask.destroy(), { once: true });
+    const abort = () => void loadingTask.destroy();
+    options.signal?.addEventListener("abort", abort, { once: true });
 
+    try {
+        return await extractPages(loadingTask, options);
+    } catch (error) {
+        await loadingTask.destroy().catch(() => undefined);
+        throw error;
+    } finally {
+        options.signal?.removeEventListener("abort", abort);
+    }
+};
+
+const extractPages = async (loadingTask: ReturnType<typeof getDocument>, options: ExtractPdfOptions): Promise<PdfExtraction> => {
     const document = await loadingTask.promise;
+
+    // Checked here rather than after the loop: a document with thousands of pages is rejected
+    // whatever its text says, so reading that text first is work nobody asked for. The caller
+    // discards the extraction in this case either way, so nothing is lost by not producing one.
+    //
+    // The rule itself stays in `check-limits.ts` with the others; moving the *call* earlier must
+    // not mean owning a second copy of the limit.
+    const pageViolations = checkPageLimits(document.numPages);
+    if (pageViolations.length > 0) throw new PageCountExceededError(pageViolations[0]);
+
     const pages: PageExtraction[] = [];
     const pagesWithoutText: number[] = [];
     const rotatedPages: number[] = [];
     const multiColumnPages: number[] = [];
     let totalCharacters = 0;
 
+    let stoppedAtPage: number | null = null;
+
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+        if (options.signal?.aborted === true) throw options.signal.reason;
+
+        // Far past any document that could be accepted. Extraction stops; rendering does not, and
+        // the caller reports both the limit and the fact that the extraction is incomplete.
+        if (totalCharacters > EXTRACTION_CHARACTER_CEILING) {
+            stoppedAtPage = pageNumber;
+            break;
+        }
+
         const page = await document.getPage(pageNumber);
         const textContent = await page.getTextContent(TEXT_CONTENT_OPTIONS);
 
@@ -352,5 +422,6 @@ export const extractPdfText = async (bytes: Uint8Array, options: ExtractPdfOptio
         rotatedPages,
         multiColumnPages,
         totalCharacters,
+        ...(stoppedAtPage === null ? {} : { extractionStoppedAtPage: stoppedAtPage }),
     };
 };
