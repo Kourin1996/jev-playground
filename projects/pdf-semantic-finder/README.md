@@ -12,7 +12,7 @@ highlighting, and the application API are working and verified in a real browser
 **Verified against the live provider.** A real browser-to-Worker-to-TypeSafe search returns the
 intended passage on both sample documents: 86 units and 22 requests in 1,055 ms on
 `assets/bitcoin.pdf`, and 13 units in 269 ms on the generated Japanese contract, where the top
-result is the single 中途解約 clause that answers the §13 demonstration query.
+result is the single early-termination clause that answers the §13 demonstration query.
 
 **Measured, and acted on.** What moves an uncertain passage's score is what sits in one request's
 `state`, not the number of questions asked over it. Every request in a search now carries the same
@@ -149,7 +149,7 @@ off so the Worker is not also reachable at a `workers.dev` address nobody announ
 
 ### Continuous deployment
 
-`.github/workflows/pdf-semantic-finder.yml`, at the root of this repository, runs formatting,
+`.github/workflows/deploy-pdf-semantic-finder.yml`, at the root of this repository, runs formatting,
 typecheck, unit tests and the end-to-end suite on every push and pull request, and deploys on a push
 to `main` — nothing reaches the public hostname without passing the same suite `npm run verify` runs
 locally. Both triggers are filtered on `projects/pdf-semantic-finder/**`, so another project here

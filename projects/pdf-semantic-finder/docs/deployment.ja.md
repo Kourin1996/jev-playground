@@ -280,7 +280,7 @@ fetch したコミットは force-push では消えませんし、GitHub は到�
 
 ## 12. GitHub からの自動デプロイ
 
-`.github/workflows/pdf-semantic-finder.yml` が、すべての push と pull request で検査を実行し、
+`.github/workflows/deploy-pdf-semantic-finder.yml` が、すべての push と pull request で検査を実行し、
 `main` が動いたときにデプロイします。GitHub が workflow を読むのはリポジトリのルートだけなので、
 このディレクトリの中ではなくルートに置いています。両方のトリガーを
 `projects/pdf-semantic-finder/**` で絞ってあるため、このリポジトリの別プロジェクトがこのスイートを

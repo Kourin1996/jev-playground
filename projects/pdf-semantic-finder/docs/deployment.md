@@ -287,7 +287,7 @@ same as open-sourcing. Adding a licence later is a decision, not an oversight to
 
 ## 12. Deploying automatically from GitHub
 
-`.github/workflows/pdf-semantic-finder.yml`, at the repository root rather than inside this
+`.github/workflows/deploy-pdf-semantic-finder.yml`, at the repository root rather than inside this
 directory because that is the only place GitHub reads workflows from, runs the checks on every push
 and pull request and deploys when `main` moves. Both triggers are filtered on
 `projects/pdf-semantic-finder/**`, so another project in this repository neither runs this suite nor

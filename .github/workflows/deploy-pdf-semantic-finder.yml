@@ -17,11 +17,11 @@ on:
     branches: [main]
     paths:
       - "projects/pdf-semantic-finder/**"
-      - ".github/workflows/pdf-semantic-finder.yml"
+      - ".github/workflows/deploy-pdf-semantic-finder.yml"
   pull_request:
     paths:
       - "projects/pdf-semantic-finder/**"
-      - ".github/workflows/pdf-semantic-finder.yml"
+      - ".github/workflows/deploy-pdf-semantic-finder.yml"
   workflow_dispatch:
 
 permissions:
@@ -61,12 +61,15 @@ jobs:
       - name: Check formatting
         run: npx prettier --check .
 
+      # Before the fixtures, not after: `scripts/make-sample-pdf.mjs` renders the sample documents
+      # by launching this browser, so it is a dependency of generating them and not only of the
+      # end-to-end suite that consumes them.
+      - name: Install the browser
+        run: npx playwright install --with-deps chromium
+
       # The suites skip loudly without these, which would turn a green run into a vacuous one.
       - name: Generate fixture PDFs
         run: npm run fixtures:sample
-
-      - name: Install the browser the end-to-end suite drives
-        run: npx playwright install --with-deps chromium
 
       # assets + typecheck + unit tests + end-to-end. The end-to-end half starts two servers:
       # the Vite dev server, and `wrangler dev` on the build, which is the only place the
@@ -76,7 +79,7 @@ jobs:
 
       - name: Keep the report from a failed run
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: playwright-report
           path: |

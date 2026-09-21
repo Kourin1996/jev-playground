@@ -1619,7 +1619,7 @@ The project lives at `projects/pdf-semantic-finder` in the public repository
 `Kourin1996/jev-playground`. Its history was imported under that prefix with `git filter-repo`, so
 the commits are this project's own and every path in them sits inside the prefix.
 
-**A workflow for the site.** `.github/workflows/pdf-semantic-finder.yml`, at the repository root
+**A workflow for the site.** `.github/workflows/deploy-pdf-semantic-finder.yml`, at the repository root
 because that is the only place GitHub reads workflows from, runs `prettier --check`, the fixtures,
 and `npm run verify` on every push and pull request, then `npm run build && npx wrangler deploy` on
 a push to `main`. Both triggers are filtered on `projects/pdf-semantic-finder/**` and every step
