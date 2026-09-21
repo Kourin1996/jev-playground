@@ -88,23 +88,24 @@ The page has a top search area, a results panel on the left, and a PDF viewer on
 └────────────────────────────────────────────────────────────┘
 ```
 
-| Action                           | Behavior                                                                                                                                                                                                                                                               |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Select or drop a PDF             | Validate it, render it, and extract text from every page                                                                                                                                                                                                               |
-| Before a PDF is open             | The drop zone is the only control; the whole box opens the file picker                                                                                                                                                                                                 |
-| Drag a file over the page        | The drop zone responds from anywhere on the page, and a drop outside it is swallowed rather than opened by the browser                                                                                                                                                 |
-| Press Enter or select Search     | Run the selected mode; make no API call while typing                                                                                                                                                                                                                   |
-| Select Meaning                   | Send all searchable segments to the application API for Jev evaluation                                                                                                                                                                                                 |
-| Select Exact text                | Search locally; do not call Jev                                                                                                                                                                                                                                        |
-| Select a result                  | Scroll the passage itself into view on its physical page; highlight the segment for a meaning result, or the matched characters for an exact one                                                                                                                       |
-| Expand a result's context        | Show the neighbouring passages that were sent with it, and open either of them. Labelled as what was sent, never as what the model used — the response does not report which context influenced the answer                                                             |
-| Select Previous or Next          | Move through existing results without another API call. The controls sit at the head of the list, beside the result count                                                                                                                                              |
-| Edit the query without searching | Keep the results already on screen, still described by the query that produced them — never re-annotated against text nobody searched for                                                                                                                              |
-| Select a passage mid-search      | Keep that passage selected as later batches re-rank the list, and when the final ranking arrives                                                                                                                                                                       |
-| Drag the panel divider           | Resize the results panel against the viewer; also operable from the keyboard                                                                                                                                                                                           |
-| Adjust zoom                      | The viewer opens fitted to the width of its pane; the zoom controls adjust from there and the percentage returns to fitting. A page indicator beside them names the page currently in view                                                                             |
-| Open another PDF                 | Discard the previous document, request, results, and highlight                                                                                                                                                                                                         |
-| Select View extracted text       | Show segment order, IDs, pages, extracted text, the context sent with each passage, and — after a meaning search — what every segment was judged to be, including the ones no result names. Layered over the viewer, which stays mounted so the reader's place is kept |
+| Action                             | Behavior                                                                                                                                                                                                                                                               |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Select or drop a PDF               | Validate it, render it, and extract text from every page                                                                                                                                                                                                               |
+| Before a PDF is open               | The drop zone is the only control; the whole box opens the file picker                                                                                                                                                                                                 |
+| Drag a file over the page          | The drop zone responds from anywhere on the page, and a drop outside it is swallowed rather than opened by the browser                                                                                                                                                 |
+| Press Enter or select Search       | Run the selected mode; make no API call while typing                                                                                                                                                                                                                   |
+| Select Meaning                     | Send all searchable segments to the application API for Jev evaluation                                                                                                                                                                                                 |
+| Select Exact text                  | Search locally; do not call Jev                                                                                                                                                                                                                                        |
+| Select a result                    | Scroll the passage itself into view on its physical page; highlight the segment for a meaning result, or the matched characters for an exact one                                                                                                                       |
+| Expand a result's context          | Show the neighbouring passages that were sent with it, and open either of them. Labelled as what was sent, never as what the model used — the response does not report which context influenced the answer                                                             |
+| Select Previous or Next            | Move through existing results without another API call. The controls sit at the head of the list, beside the result count                                                                                                                                              |
+| Edit the query without searching   | Keep the results already on screen, still described by the query that produced them — never re-annotated against text nobody searched for                                                                                                                              |
+| Select a passage mid-search        | Keep that passage selected as later batches re-rank the list, and when the final ranking arrives                                                                                                                                                                       |
+| Drag the panel divider             | Resize the results panel against the viewer; also operable from the keyboard. Below 768 px the two panes are shown one at a time instead, chosen by a Results / Document control, and the divider is gone                                                              |
+| Select a result on a narrow screen | Switch to the document at that passage; the pane control is the way back, and the search and the selection survive the switch                                                                                                                                          |
+| Adjust zoom                        | The viewer opens fitted to the width of its pane; the zoom controls adjust from there and the percentage returns to fitting. A page indicator beside them names the page currently in view                                                                             |
+| Open another PDF                   | Discard the previous document, request, results, and highlight                                                                                                                                                                                                         |
+| Select View extracted text         | Show segment order, IDs, pages, extracted text, the context sent with each passage, and — after a meaning search — what every segment was judged to be, including the ones no result names. Layered over the viewer, which stays mounted so the reader's place is kept |
 
 Each result shows the physical page number and original extracted text. “Page 3” means the third page in the file, regardless of printed page numbers. Do not show generated explanations.
 
@@ -1285,3 +1286,23 @@ Testing the middle one needed a response the test could release in instalments, 
 `route.fulfill` cannot do: `tests/controlled-stream.ts` replaces `fetch` inside the page so the
 application's own client consumes a stream the test drives. It is also what lets the quality
 harness's "is it finished" rule be checked against the real panel.
+
+### 14.25 One pane at a time below 768 px
+
+The split layout had no breakpoint of any kind: not one responsive class in the workspace, the
+search bar or the results panel. At 390×844 the results pane kept its 336 pixels and its 280-pixel
+floor, the divider took six more, and the PDF was left with about eighteen — measured, and confirmed
+on a screenshot. Dragging a divider is not an answer on a phone.
+
+Below 768 px the panes are shown one at a time. Searching turns to the results, because that is what
+was asked for; choosing a passage turns to the document, because that is what choosing means; and
+the pane control is the way back.
+
+**Both panes stay mounted; the inactive one is hidden.** Unmounting the viewer would tear down every
+canvas and text layer and drop the reader back at page one — the same reason the extracted-text view
+is layered over the viewer rather than replacing it (§14.12). A test switches away and back and
+checks the page indicator has not moved.
+
+The fit-to-width calculation also subtracted a fixed 48-pixel gutter, which on a narrow pane is a
+large fraction of the width and could drive the scale to its floor. It now takes the smaller of that
+gutter and a fifth of the available width.

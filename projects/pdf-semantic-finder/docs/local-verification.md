@@ -121,7 +121,12 @@ whatever fitting produced rather than 100%. **Fit** is pressed; pressing a zoom 
 and steps a fixed ladder (50, 75, 100, 125, 150, 200, 300), and **Fit** returns. Beside them, the
 page indicator should follow the page you scroll to.
 
-Drag the divider between the results panel and the viewer. The panel should resize between about
+Narrow the window below 768 pixels. The two panes should stop sharing the screen and be chosen
+by a Results / Document control instead: searching turns to the results, choosing a passage turns
+to the document, and switching back must leave the search, the selection and your place in the
+document exactly as they were. Nothing should scroll sideways at any width.
+
+Back at full width, drag the divider between the results panel and the viewer. The panel should resize between about
 280 and 560 pixels and stay where it was put. Tab to it and press Left and Right — it must move
 from the keyboard too, since a pointer drag is not an accessible control on its own.
 

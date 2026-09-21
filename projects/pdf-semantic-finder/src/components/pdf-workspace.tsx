@@ -27,6 +27,7 @@ import { buildSearchRequest, requestSemanticSearch } from "@/lib/search/semantic
 import type { PdfSegment } from "@/lib/types";
 import type { SearchErrorCode, SearchHit, SearchMode, SearchResultRecord, SearchStatus } from "@/lib/types";
 import { LIMITS } from "@/lib/types";
+import { cx } from "@/utils/cx";
 
 /** Zoom is stored to two decimals so the label and the rendered scale cannot disagree. */
 const round = (value: number) => Number(value.toFixed(2));
@@ -42,6 +43,15 @@ const round = (value: number) => Number(value.toFixed(2));
 const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3] as const;
 const zoomOut = (scale: number) => [...ZOOM_STEPS].reverse().find((step) => step < scale - 0.001) ?? ZOOM_STEPS[0];
 const zoomIn = (scale: number) => ZOOM_STEPS.find((step) => step > scale + 0.001) ?? ZOOM_STEPS[ZOOM_STEPS.length - 1];
+
+/**
+ * Below this width the two panes do not fit side by side and are shown one at a time.
+ *
+ * Measured rather than chosen: at 390 px the results pane kept its 336 px and its 280 px floor, the
+ * divider took 6 px, and the PDF was left with about 18 px. Dragging a divider is not a workable
+ * answer on a phone either.
+ */
+const SINGLE_PANE_WIDTH = 768;
 
 /** Bounds for the results panel: narrow enough to read a passage, wide enough to leave the page usable. */
 const MIN_PANEL_WIDTH = 280;
@@ -158,6 +168,10 @@ export const PdfWorkspace = () => {
     const [visiblePage, setVisiblePage] = useState(1);
     /** Width of the results panel, dragged by the divider between the two. */
     const [panelWidth, setPanelWidth] = useState(336);
+    /** True while the viewport is too narrow to show both panes at once. */
+    const [isNarrow, setIsNarrow] = useState(false);
+    /** Which pane a narrow screen is showing. Ignored when both fit. */
+    const [narrowPane, setNarrowPane] = useState<"results" | "document">("document");
     const viewerRef = useRef<HTMLDivElement>(null);
     const [fitScale, setFitScale] = useState(1);
 
@@ -199,6 +213,8 @@ export const PdfWorkspace = () => {
             abortRef.current?.abort();
             abortRef.current = null;
             currentRequestIdRef.current = "";
+
+            setNarrowPane("document");
 
             const previous = loaded;
             setLoaded(null);
@@ -265,6 +281,15 @@ export const PdfWorkspace = () => {
         [loaded, resetSearchState],
     );
 
+    useEffect(() => {
+        const query = window.matchMedia(`(max-width: ${SINGLE_PANE_WIDTH - 1}px)`);
+        const apply = () => setIsNarrow(query.matches);
+
+        apply();
+        query.addEventListener("change", apply);
+        return () => query.removeEventListener("change", apply);
+    }, []);
+
     /**
      * Whether the reader has chosen a passage themselves.
      *
@@ -279,6 +304,9 @@ export const PdfWorkspace = () => {
     const selectResult = useCallback((key: string) => {
         hasChosenResultRef.current = true;
         setSelectedKey(key);
+        // On a narrow screen choosing a passage means "take me to it"; the pane control is the way
+        // back. On a wide one both panes are already visible and nothing moves.
+        setNarrowPane("document");
     }, []);
 
     /** Stops loading the document currently being opened, so a slow import can be abandoned. */
@@ -306,6 +334,8 @@ export const PdfWorkspace = () => {
             // Recorded with the results, so the panel describes what was searched rather than
             // whatever is in the box by the time the answer arrives.
             setSubmitted({ query, mode: searchMode });
+            // Searching is a request to be shown the answers, so a narrow screen turns to them.
+            setNarrowPane("results");
             const searchStartedAt = performance.now();
 
             if (searchMode === "exact") {
@@ -470,8 +500,10 @@ export const PdfWorkspace = () => {
         const apply = () => {
             const available = element.clientWidth;
             if (cancelled || unscaledWidth <= 0 || available <= 0) return;
-            // 48px of gutter, matching the padding the viewer puts around a page.
-            setFitScale(Math.min(3, Math.max(0.5, round((available - 48) / unscaledWidth))));
+            // 48px of gutter, matching the padding the viewer puts around a page — but never more
+            // than the pane has, or a narrow screen computes a negative width and clamps to 0.5.
+            const usable = Math.max(available * 0.8, available - 48);
+            setFitScale(Math.min(3, Math.max(0.2, round(usable / unscaledWidth))));
         };
 
         void loaded.extraction.document
@@ -571,7 +603,7 @@ export const PdfWorkspace = () => {
     return (
         <div className="flex h-dvh justify-center bg-primary">
             <div className="flex w-full max-w-300 flex-col">
-                <header className="flex items-center justify-between gap-4 px-6 pt-5 pb-3">
+                <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6 pt-5 pb-3">
                     <div className="flex min-w-0 items-baseline gap-3">
                         <h1 className="shrink-0 text-lg font-semibold tracking-tight text-primary">PDF Semantic Finder</h1>
                         {/*
@@ -625,10 +657,40 @@ export const PdfWorkspace = () => {
                     />
                 </div>
 
+                {/*
+                 * One pane at a time below the breakpoint. Both stay mounted and the inactive one
+                 * is hidden rather than unmounted: tearing the viewer down would drop every canvas
+                 * and text layer, and with them the reader's place in the document — the same
+                 * reason the extracted-text view is layered over it instead of replacing it.
+                 */}
+                {loaded !== null && isNarrow && (
+                    <div role="radiogroup" aria-label="Pane" className="mx-6 mb-3 inline-flex self-start rounded-lg bg-secondary p-0.5">
+                        {(["results", "document"] as const).map((pane) => (
+                            <button
+                                key={pane}
+                                type="button"
+                                role="radio"
+                                aria-checked={narrowPane === pane}
+                                onClick={() => setNarrowPane(pane)}
+                                className={cx(
+                                    "cursor-pointer rounded-md px-3 py-1.5 text-sm font-semibold capitalize outline-brand transition duration-100 ease-linear focus-visible:outline-2 focus-visible:outline-offset-1",
+                                    narrowPane === pane ? "bg-primary text-primary shadow-xs" : "text-tertiary hover:text-secondary",
+                                )}
+                            >
+                                {pane}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
                 <main className="flex min-h-0 flex-1">
                     {loaded !== null && (
                         <>
-                            <aside className="flex shrink-0 flex-col" style={{ width: panelWidth }}>
+                            <aside
+                                hidden={isNarrow && narrowPane !== "results"}
+                                className={cx("flex flex-col", isNarrow ? "min-w-0 flex-1" : "shrink-0")}
+                                style={isNarrow ? undefined : { width: panelWidth }}
+                            >
                                 <SearchResults
                                     hasDocument={loaded !== null}
                                     status={status}
@@ -653,6 +715,8 @@ export const PdfWorkspace = () => {
                              * control on its own.
                              */}
                             <div
+                                // The divider only makes sense when both panes are on screen.
+                                hidden={isNarrow}
                                 role="separator"
                                 aria-label="Resize results panel"
                                 aria-orientation="vertical"
@@ -674,7 +738,7 @@ export const PdfWorkspace = () => {
                         </>
                     )}
 
-                    <section className="relative flex min-w-0 flex-1 flex-col">
+                    <section hidden={loaded !== null && isNarrow && narrowPane !== "document"} className="relative flex min-w-0 flex-1 flex-col">
                         {loaded === null ? (
                             <div className="flex flex-1 items-center justify-center p-8">
                                 {isLoading ? (
@@ -755,7 +819,7 @@ export const PdfWorkspace = () => {
                                         </div>
                                     )}
                                 </div>
-                                <div className="flex items-center justify-between gap-2 bg-secondary px-5 py-2.5">
+                                <div className="flex flex-wrap items-center justify-between gap-2 bg-secondary px-5 py-2.5">
                                     {/*
                                      * The debug view sits with the viewer it replaces rather than
                                      * beside Open PDF, which separates what a reader does from
