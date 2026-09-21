@@ -1,0 +1,119 @@
+# Checks on every change to projects/pdf-semantic-finder, and a deploy on every push to `main`.
+#
+# The deploy job depends on the check job, so what reaches pdf-finder.kourin.jp is always something
+# that passed the same suite a person would run locally (`npm run verify`). There is no separate
+# "deploy without checks" path, deliberately: the admission limits and the Content-Security-Policy
+# are both things a deployment can lose silently, and the end-to-end suite is what notices.
+#
+# What this workflow does NOT do, and must not:
+#   - upload secrets. `TYPESAFE_API_KEY` is set once with `wrangler secret put` and persists across
+#     deploys. A deploy never reads it, so a compromised CI token cannot exfiltrate it.
+#   - run the evaluation set. That calls the real provider and costs money per run; it stays a
+#     deliberate local command (`npm run eval`).
+name: pdf-semantic-finder
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "projects/pdf-semantic-finder/**"
+      - ".github/workflows/pdf-semantic-finder.yml"
+  pull_request:
+    paths:
+      - "projects/pdf-semantic-finder/**"
+      - ".github/workflows/pdf-semantic-finder.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, and never cancel one midway: `wrangler deploy` also applies Durable Object
+# migrations, and a cancelled run leaves no record of how far it got.
+concurrency:
+  group: pdf-semantic-finder-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Keep the runner from phoning home on every wrangler invocation.
+  WRANGLER_SEND_METRICS: "false"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # This repository holds several projects; every command below belongs to this one.
+    defaults:
+      run:
+        working-directory: projects/pdf-semantic-finder
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: projects/pdf-semantic-finder/package-lock.json
+
+      # `prepare` copies the PDF.js runtime assets and generates worker-env.d.ts, so this also
+      # pins both to the installed versions rather than to anything committed.
+      - run: npm ci
+
+      - name: Check formatting
+        run: npx prettier --check .
+
+      # The suites skip loudly without these, which would turn a green run into a vacuous one.
+      - name: Generate fixture PDFs
+        run: npm run fixtures:sample
+
+      - name: Install the browser the end-to-end suite drives
+        run: npx playwright install --with-deps chromium
+
+      # assets + typecheck + unit tests + end-to-end. The end-to-end half starts two servers:
+      # the Vite dev server, and `wrangler dev` on the build, which is the only place the
+      # deployed response headers exist before they are deployed.
+      - name: Verify
+        run: npm run verify
+
+      - name: Keep the report from a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            projects/pdf-semantic-finder/playwright-report/
+            projects/pdf-semantic-finder/test-results/
+          retention-days: 7
+
+  deploy:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: projects/pdf-semantic-finder
+    # Recorded on the run so the deployed commit is visible without reading logs.
+    environment:
+      name: pdf-semantic-finder
+      url: https://pdf-finder.kourin.jp
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: projects/pdf-semantic-finder/package-lock.json
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # Deployed with the wrangler from this project's lockfile, so the version that deploys
+      # is the version the checks ran against.
+      - name: Deploy
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

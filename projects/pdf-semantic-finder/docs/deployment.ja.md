@@ -253,32 +253,17 @@ git status --short --ignored | grep -E '^!!' | head   # p/, docs/code-review-*, 
 この区別が要点で、untracked なファイルは `git add -A` 1回で公開されますし、
 `docs/code-review-*.md` はこのデプロイの未解決の弱点の一覧です。
 
-### 11.2 作業を `main` に載せる
+### 11.2 すでに公開されています
 
-公開したくないものの排除は push の前に行う必要があります。誰かが既に fetch したコミットは
-force-push では消えませんし、GitHub は到達不能になったオブジェクトをしばらく SHA 指定で
-参照可能なまま保持します。確実な取り消しはリポジトリの削除だけです。
+このプロジェクトは [Kourin1996/jev-playground](https://github.com/Kourin1996/jev-playground) の
+`projects/pdf-semantic-finder` にあり、このリポジトリは public です。履歴は `git filter-repo` で
+この prefix 配下に書き換えて取り込んであるので、コミットはこのプロジェクト自身のものであり、
+その中のすべてのパスが prefix の内側にあります。
 
-```bash
-git switch main
-git merge --ff-only review-fixes/segmentation-batching-and-evaluation
-git log --oneline -5
-```
-
-### 11.3 作成する
-
-```bash
-gh repo create Kourin1996/pdf-finder --public --source=. --remote=origin --push
-```
-
-`--source=.` は空のリポジトリではなくこの作業コピーから作成し、`--push` は**現在のブランチ**を
-push して upstream に設定します。したがって §11.2 のように先に `main` へ切り替えてください。
-他のローカルブランチは明示的に push するまでローカルに残ります — 公開するつもりの履歴だけを
-1ブランチずつ公開できる、望ましい挙動です。
-
-世間に見せる前に自分で確認したい場合は `--private` で作成して push し、GitHub 上でファイル一覧を
-確認してから Settings で可視性を切り替えてください。private → public は簡単ですが、逆方向は
-既に fetch されたものを取り消せません。
+したがって公開は `gh repo create` ではなく push であり、§11.1 は一度きりではなく**毎回の push の
+前に**実行する検査です。公開したくないものの排除は push の前に行う必要があります。誰かが既に
+fetch したコミットは force-push では消えませんし、GitHub は到達不能になったオブジェクトを
+しばらく SHA 指定で参照可能なまま保持します。確実な取り消しはリポジトリの削除だけです。
 
 `package.json` は `"private": true` を持ち `LICENSE` はありません。つまり読めるだけで誰にも権利は
 与えていません。これは意図した整合的な立場です — 公開することと OSS にすることは別です。
@@ -286,8 +271,12 @@ push して upstream に設定します。したがって §11.2 のように先
 
 ## 12. GitHub からの自動デプロイ
 
-`.github/workflows/deploy.yml` が、すべての push と pull request で検査を実行し、`main` が動いた
-ときにデプロイします。
+`.github/workflows/pdf-semantic-finder.yml` が、すべての push と pull request で検査を実行し、
+`main` が動いたときにデプロイします。GitHub が workflow を読むのはリポジトリのルートだけなので、
+このディレクトリの中ではなくルートに置いています。両方のトリガーを
+`projects/pdf-semantic-finder/**` で絞ってあるため、このリポジトリの別プロジェクトがこのスイートを
+走らせることも、このサイトをデプロイすることもありません。各ステップは
+`working-directory: projects/pdf-semantic-finder` で実行されます。
 
 ### 12.1 実行される内容
 
@@ -298,7 +287,7 @@ skip されたスイートは何も証明しない green です)、次に
 プレビューもここに含まれます。
 
 そのうえで、`main` への push のときだけ `npm run build && npx wrangler deploy` を実行します。
-このリポジトリの lockfile に固定された wrangler を使うので、デプロイするバージョンは検査が
+このプロジェクトの lockfile に固定された wrangler を使うので、デプロイするバージョンは検査が
 走ったバージョンと同じです。
 
 ### 12.2 意図的に実行しないこと
@@ -319,7 +308,7 @@ Cloudflare の **Edit Cloudflare Workers** テンプレートから API トー�
 テンプレートの現在の権限一覧は、この段落ではなく Cloudflare の公式文書で確認してください。
 テンプレートは変わります。
 
-そのうえでリポジトリの Settings → Secrets and variables → Actions に:
+そのうえで `jev-playground` の Settings → Secrets and variables → Actions に:
 
 ```
 CLOUDFLARE_API_TOKEN     上記のトークン

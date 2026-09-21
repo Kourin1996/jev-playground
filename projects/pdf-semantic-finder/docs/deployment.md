@@ -260,32 +260,17 @@ empty result. A scanner that silently matches nothing looks exactly like a clean
 That distinction is the point: untracked files are one `git add -A` away from being published, and
 `docs/code-review-*.md` is a list of this deployment's open weaknesses.
 
-### 11.2 Put the work on `main`
+### 11.2 It is already public
 
-Anything not meant to be read has to go before the push, not after: a force-push does not remove a
-commit somebody already fetched, and GitHub keeps unreachable objects reachable by SHA for a while.
-Deleting the repository is the only reliable undo.
+This project lives at `projects/pdf-semantic-finder` in
+[Kourin1996/jev-playground](https://github.com/Kourin1996/jev-playground), which is a public
+repository. The history was imported under that prefix with `git filter-repo`, so the commits are
+the project's own and every path in them sits inside the prefix.
 
-```bash
-git switch main
-git merge --ff-only review-fixes/segmentation-batching-and-evaluation
-git log --oneline -5
-```
-
-### 11.3 Create it
-
-```bash
-gh repo create Kourin1996/pdf-finder --public --source=. --remote=origin --push
-```
-
-`--source=.` makes the repository from this working copy rather than an empty one, and `--push`
-sends the **current branch** and sets its upstream — so switch to `main` first, as §11.2 does. Other
-local branches stay local until pushed explicitly, which is the behaviour to want: publish the
-history you meant to publish, one branch at a time.
-
-If seeing it before the world does is worth more than one command, create it with `--private`, push,
-read the file list on GitHub, and flip the visibility in Settings. Going private → public is easy;
-the other direction does not un-fetch anything.
+Publication is therefore a push, not a `gh repo create`, and §11.1 is the check to run **before**
+each push rather than once. Anything not meant to be read has to go before the push, not after: a
+force-push does not remove a commit somebody already fetched, and GitHub keeps unreachable objects
+reachable by SHA for a while. Deleting the repository is the only reliable undo.
 
 `package.json` carries `"private": true` and there is no `LICENSE`, so the repository is readable
 without granting anyone rights. That is a coherent position and deliberate — publishing is not the
@@ -293,8 +278,11 @@ same as open-sourcing. Adding a licence later is a decision, not an oversight to
 
 ## 12. Deploying automatically from GitHub
 
-`.github/workflows/deploy.yml` runs the checks on every push and pull request, and deploys when
-`main` moves.
+`.github/workflows/pdf-semantic-finder.yml`, at the repository root rather than inside this
+directory because that is the only place GitHub reads workflows from, runs the checks on every push
+and pull request and deploys when `main` moves. Both triggers are filtered on
+`projects/pdf-semantic-finder/**`, so another project in this repository neither runs this suite nor
+deploys this site, and every step runs with `working-directory: projects/pdf-semantic-finder`.
 
 ### 12.1 What it runs
 
@@ -305,8 +293,7 @@ tests, end-to-end. The end-to-end half brings up both servers, including the `wr
 that §5.3's headers are actually asserted against.
 
 Only then, and only on a push to `main`, `npm run build && npx wrangler deploy`, using the wrangler
-pinned in this repository's lockfile so the version that deploys is the version the checks ran
-against.
+pinned in this project's lockfile so the version that deploys is the version the checks ran against.
 
 ### 12.2 What it deliberately does not run
 
@@ -325,7 +312,7 @@ the account plus Workers Routes:Edit on the zone, which is what a custom-domain 
 it to the one account and the `kourin.jp` zone. Check the template's current permission list against
 Cloudflare's documentation rather than against this paragraph; the templates change.
 
-Then, in the repository's Settings → Secrets and variables → Actions:
+Then, in `jev-playground`'s Settings → Secrets and variables → Actions:
 
 ```
 CLOUDFLARE_API_TOKEN     the token above

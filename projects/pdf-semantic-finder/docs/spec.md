@@ -1610,14 +1610,21 @@ are independent: either can happen without the other.
 
 **Procedure, not code, for the repository.** `docs/deployment.md` §11 records the publication steps.
 The one worth stating here is that the credential sweep must be re-run rather than cited, and its
-searcher must be shown to match something before an empty result is believed — this repository has
+searcher must be shown to match something before an empty result is believed — this project has
 already seen a secret scanner that silently matched nothing, including the file holding the key.
 `.dev.vars`, `p`, `docs/code-review-*.md` and `UNTITLED.md` are gitignored rather than untracked, so
 a `git add -A` cannot publish the list of this deployment's open weaknesses along with it.
 
-**A workflow for the site.** `.github/workflows/deploy.yml` runs `prettier --check`, the fixtures,
+The project lives at `projects/pdf-semantic-finder` in the public repository
+`Kourin1996/jev-playground`. Its history was imported under that prefix with `git filter-repo`, so
+the commits are this project's own and every path in them sits inside the prefix.
+
+**A workflow for the site.** `.github/workflows/pdf-semantic-finder.yml`, at the repository root
+because that is the only place GitHub reads workflows from, runs `prettier --check`, the fixtures,
 and `npm run verify` on every push and pull request, then `npm run build && npx wrangler deploy` on
-a push to `main`. The end-to-end half is not optional decoration in this pipeline: §9.3's admission
+a push to `main`. Both triggers are filtered on `projects/pdf-semantic-finder/**` and every step
+runs with `working-directory: projects/pdf-semantic-finder`, so a sibling project in the same
+repository neither runs this suite nor deploys this site. The end-to-end half is not optional decoration in this pipeline: §9.3's admission
 limits and §10's response headers are both things a deployment can lose without any visible symptom,
 and `tests/headers.spec.ts` against the `wrangler dev` preview is what notices.
 

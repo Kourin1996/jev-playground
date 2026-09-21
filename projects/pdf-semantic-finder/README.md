@@ -149,9 +149,11 @@ off so the Worker is not also reachable at a `workers.dev` address nobody announ
 
 ### Continuous deployment
 
-`.github/workflows/deploy.yml` runs formatting, typecheck, unit tests and the end-to-end suite on
-every push and pull request, and deploys on a push to `main` — nothing reaches the public hostname
-without passing the same suite `npm run verify` runs locally. It needs two repository secrets,
+`.github/workflows/pdf-semantic-finder.yml`, at the root of this repository, runs formatting,
+typecheck, unit tests and the end-to-end suite on every push and pull request, and deploys on a push
+to `main` — nothing reaches the public hostname without passing the same suite `npm run verify` runs
+locally. Both triggers are filtered on `projects/pdf-semantic-finder/**`, so another project here
+neither runs this suite nor deploys this site. It needs two repository secrets,
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; see
 [docs/deployment.md §12](docs/deployment.md).
 
@@ -219,10 +221,12 @@ present. See `tests/fixtures/README.md` for what each file is for.
 
 ## Publishing this repository
 
-This is about making the repository **publicly readable**, which is a narrower question than
-open-sourcing it. The step-by-step procedure — re-running the credential sweep, getting the work
-onto `main`, `gh repo create` — is [docs/deployment.md §11](docs/deployment.md). What follows is
-what was audited and what was concluded. `package.json` carries `"private": true` and there is no `LICENSE`, so nothing
+This project sits in a public repository already: `projects/pdf-semantic-finder` in
+[Kourin1996/jev-playground](https://github.com/Kourin1996/jev-playground). Public here means
+**publicly readable**, which is a narrower thing than open-sourced — `package.json` carries
+`"private": true` and there is no `LICENSE`, so nothing grants anyone rights. The credential sweep
+to run before each push is [docs/deployment.md §11](docs/deployment.md). What follows is what was
+audited and what was concluded. `package.json` carries `"private": true` and there is no `LICENSE`, so nothing
 here grants anyone rights; that is a coherent position for a source-visible repository and needs no
 change. What follows is what would become visible.
 
