@@ -29,7 +29,7 @@
 
 - Use TypeScript with strict typing. Validate data at browser, Worker, and external API boundaries.
 - Use kebab case for source, style, test, and configuration filenames.
-- Before using, adding, or modifying Untitled UI components, read `UNTITLED.md` and follow its component, import, styling, accessibility, and interaction guidance.
+- Untitled UI components come from [untitleduico/react](https://github.com/untitleduico/react) under the MIT licence; see `THIRD-PARTY-NOTICES.md`. Follow the conventions already in `src/components/base/`, in particular prefixing every `react-aria-components` import with `Aria`, and prefer extending an existing component to adding a new one.
 - Prefix imports from `react-aria-components` with `Aria`, for example `Button as AriaButton`.
 - Reuse existing Untitled UI components and repository utilities before creating replacements.
 - Keep components focused on presentation and interaction. Put PDF and search logic in the modules planned by `docs/spec.md`.

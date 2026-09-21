@@ -52,7 +52,11 @@ npm run verify            # assets + typecheck + unit tests + end-to-end
 
 `npm run verify` runs two servers: the Vite dev server and a `wrangler dev` preview built from
 `dist/`. The preview is what the header tests run against, because the dev server models neither
-Cloudflare's asset routing nor `public/_headers`. The first run is slow while that build happens.
+Cloudflare's asset routing nor `public/_headers`.
+
+On a cold start both come up at once while the build runs, and a browser test occasionally times out
+waiting for a dev server that is still busy. Re-run it; if it passes with the servers warm, that was
+the cause. A real failure repeats.
 
 ### 3.2 Set the secrets
 

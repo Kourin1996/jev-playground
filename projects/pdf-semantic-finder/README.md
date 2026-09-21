@@ -213,55 +213,33 @@ private-key blocks, bearer tokens and assigned secrets found nothing outside loc
 `.dev.vars.example` holds an empty value. No home paths and no personal email addresses are
 committed. Re-run the check before publishing rather than trusting this paragraph.
 
-### Deploying is allowed; publishing the source is the part that is not
+### Untitled UI: checked file by file, and all of it is MIT
 
-Untitled UI's licence permits the deployment explicitly — "Creating websites, web applications, and
-apps for yourself, your company, or for a client" — and the deployed build does not expose their
-source: the production build emits no source maps and no `sourceMappingURL`, so what reaches a
-browser is compiled output.
+Untitled UI ships in two halves that share directory names, and the licence turns entirely on which
+half a file came from. The open-source half is [untitleduico/react](https://github.com/untitleduico/react)
+under the MIT licence; PRO is a separate distribution whose agreement forbids exposing its source
+"in any product, including open-source repositories".
 
-A public repository is the specific thing the licence names:
+Nothing in this repository carries a marker saying which half it came from, so every one of the 22
+files under `src/components/base/` and `src/components/application/` was checked against the
+open-source repository's file tree. **All 22 are present in it**, and three spot-checked by content
+match their upstream copies at 0.85 to 0.997 token similarity — the MIT versions with local edits,
+which MIT permits. None needs replacing.
 
-> Expose raw Untitled UI React source code in any product, including open-source repositories,
-> downloadable assets, or browser-accessible code.
+What MIT does require is the notice, which is now in `THIRD-PARTY-NOTICES.md` along with the
+Bitcoin whitepaper and PDF.js.
 
-> Distribute or publish the files or assets within the files online, or share access to the files.
+Deploying was never in question either way: the licence permits "Creating websites, web
+applications, and apps for yourself, your company, or for a client", and the production build emits
+no source maps and no `sourceMappingURL`, so the deployed site exposes compiled output only.
 
-`src/components/base/` and `src/components/application/` hold 22 component files from Untitled UI
-React. The licence exempts components "made available as open-source software under the MIT
-License… clearly marked as open source within the documentation and codebase" — **none of the 22
-carries any such marking**, so none can be shown to be in that exempt set on the evidence in this
-repository.
+### Agent working material is no longer in the repository
 
-Three ways forward: confirm with Untitled UI which components are the MIT-marked ones; replace the
-ten that are actually used (`button`, `input`, `label`, `hint-text`, `tooltip`, `badges`,
-`progress-indicators`, `input-group`, `button-utility`, `file-upload-base`) and delete the twelve
-that are not used at all; or keep the repository private and publish only the deployed site.
-
-`UNTITLED.md` is a different case — it is Untitled UI's own published `AGENTS.md`, meant to be
-placed in a repository that uses their components. That is not raw component source, and the risk
-is correspondingly lower, but it is still their document reproduced verbatim; replacing it with a
-link is the cautious option.
-
-The npm packages `@untitledui/icons` and `@untitledui/file-icons` are MIT and are not affected. The
-problem is vendored source, not dependencies.
-
-### Vendored agent skills need their licence text
-
-`.agents/skills/` holds five skills pulled from public repositories, with `.claude/skills/`
-symlinked to them and `skills-lock.json` recording where each came from:
-
-| Skill                         | Source                     | Licence    | Licence text present |
-| ----------------------------- | -------------------------- | ---------- | -------------------- |
-| `frontend-design`             | `anthropics/skills`        | Apache-2.0 | yes, `LICENSE.txt`   |
-| `vercel-composition-patterns` | `vercel-labs/agent-skills` | MIT        | no                   |
-| `vercel-react-best-practices` | `vercel-labs/agent-skills` | MIT        | no                   |
-| `web-design-guidelines`       | `vercel-labs/agent-skills` | MIT        | no                   |
-| `workers-best-practices`      | `cloudflare/skills`        | Apache-2.0 | no                   |
-
-Both licences allow redistribution and both require the notice to travel with the copy. Either add
-the missing licence files or leave `.agents/` and `.claude/` out of what is published — they are
-working material rather than part of the product.
+`.agents/`, `.claude/`, `skills-lock.json` and `UNTITLED.md` were tracked and are not any more. They
+are tooling rather than product: five agent skills copied from `anthropics/skills`,
+`vercel-labs/agent-skills` and `cloudflare/skills` under MIT and Apache-2.0, and Untitled UI's own
+`AGENTS.md`. Redistributing the skills would mean carrying notices for material that has nothing to
+do with what this application does, so they stay on disk and out of the repository instead.
 
 ### Working notes are now ignored rather than merely untracked
 
