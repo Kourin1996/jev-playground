@@ -1,5 +1,5 @@
 import type { ComponentProps, ComponentPropsWithRef } from "react";
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { FileIcon } from "@untitledui/file-icons";
 import { FileIcon as FileTypeIcon } from "@untitledui/file-icons";
 import { CheckCircle, Trash01, UploadCloud02, XCircle } from "@untitledui/icons";
@@ -81,6 +81,60 @@ export const FileUploadDropZone = ({
     const inputRef = useRef<HTMLInputElement>(null);
     const [isInvalid, setIsInvalid] = useState(false);
     const [isDraggingOver, setIsDraggingOver] = useState(false);
+    const [isFileOverWindow, setIsFileOverWindow] = useState(false);
+
+    /**
+     * Watches the whole window, not just the box.
+     *
+     * Two reasons. The box only learns about a drag once the pointer is already on it, so without
+     * this it gives no sign that a dropped file would be accepted anywhere. And a file dropped
+     * outside the box is otherwise handled by the browser, which navigates to it — in this
+     * application that discards the open document and the current search.
+     *
+     * `dragenter` and `dragleave` fire in pairs as the pointer crosses child elements, so they are
+     * counted rather than treated as a toggle.
+     */
+    useEffect(() => {
+        if (isDisabled) return;
+
+        let depth = 0;
+        const carriesFiles = (event: DragEvent) => event.dataTransfer?.types.includes("Files") ?? false;
+
+        const onDragEnter = (event: DragEvent) => {
+            if (!carriesFiles(event)) return;
+            depth += 1;
+            setIsFileOverWindow(true);
+        };
+        const onDragOver = (event: DragEvent) => {
+            if (!carriesFiles(event)) return;
+            // Required, or the browser refuses the drop and falls back to opening the file.
+            event.preventDefault();
+        };
+        const onDragLeave = (event: DragEvent) => {
+            if (!carriesFiles(event)) return;
+            depth = Math.max(0, depth - 1);
+            if (depth === 0) setIsFileOverWindow(false);
+        };
+        const onDrop = (event: DragEvent) => {
+            depth = 0;
+            setIsFileOverWindow(false);
+            // The box handles its own drop and stops propagation, so anything reaching the window
+            // was dropped outside it. Swallowed rather than navigated to.
+            if (carriesFiles(event)) event.preventDefault();
+        };
+
+        window.addEventListener("dragenter", onDragEnter);
+        window.addEventListener("dragover", onDragOver);
+        window.addEventListener("dragleave", onDragLeave);
+        window.addEventListener("drop", onDrop);
+
+        return () => {
+            window.removeEventListener("dragenter", onDragEnter);
+            window.removeEventListener("dragover", onDragOver);
+            window.removeEventListener("dragleave", onDragLeave);
+            window.removeEventListener("drop", onDrop);
+        };
+    }, [isDisabled]);
 
     const isFileTypeAccepted = (file: File): boolean => {
         if (!accept) return true;
@@ -106,7 +160,7 @@ export const FileUploadDropZone = ({
         });
     };
 
-    const handleDragIn = (event: React.DragEvent<HTMLDivElement>) => {
+    const handleDragIn = (event: React.DragEvent<HTMLLabelElement>) => {
         if (isDisabled) return;
 
         event.preventDefault();
@@ -114,7 +168,7 @@ export const FileUploadDropZone = ({
         setIsDraggingOver(true);
     };
 
-    const handleDragOut = (event: React.DragEvent<HTMLDivElement>) => {
+    const handleDragOut = (event: React.DragEvent<HTMLLabelElement>) => {
         if (isDisabled) return;
 
         event.preventDefault();
@@ -179,7 +233,7 @@ export const FileUploadDropZone = ({
         }
     };
 
-    const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    const handleDrop = (event: React.DragEvent<HTMLLabelElement>) => {
         if (isDisabled) return;
 
         handleDragOut(event);
@@ -191,21 +245,37 @@ export const FileUploadDropZone = ({
     };
 
     return (
-        <div
+        // A label, not a div: clicking anywhere inside the box — padding, icon, hint — opens the
+        // picker through the native control rather than through a handler, and the sr-only input
+        // it wraps keeps the box reachable and operable from the keyboard.
+        <label
             data-dropzone
+            htmlFor={id}
             onDragOver={handleDragIn}
             onDragEnter={handleDragIn}
             onDragLeave={handleDragOut}
             onDragEnd={handleDragOut}
             onDrop={handleDrop}
             className={cx(
-                "relative flex flex-col items-center gap-3 rounded-xl bg-primary px-6 py-4 text-tertiary ring-1 ring-secondary transition duration-100 ease-linear ring-inset",
-                isDraggingOver && "ring-2 ring-brand",
+                "relative flex cursor-pointer flex-col items-center gap-3 rounded-xl bg-primary px-6 py-4 text-tertiary ring-1 outline-brand transition duration-100 ease-linear ring-inset focus-within:outline-2 focus-within:outline-offset-2 motion-reduce:transition-none",
+                // Three states, each a step stronger: at rest, a file somewhere over the page, a
+                // file over the box itself.
+                isDraggingOver ? "scale-[1.02] bg-brand-primary ring-2 ring-brand" : isFileOverWindow ? "scale-[1.01] ring-2 ring-brand" : "ring-secondary",
                 isDisabled && "cursor-not-allowed bg-secondary",
                 className,
             )}
         >
-            <FeaturedIcon icon={UploadCloud02} color="gray" theme="modern" size="md" className={cx(isDisabled && "opacity-50")} />
+            <FeaturedIcon
+                icon={UploadCloud02}
+                color={isDraggingOver || isFileOverWindow ? "brand" : "gray"}
+                theme="modern"
+                size="md"
+                className={cx(
+                    "transition duration-100 ease-linear motion-reduce:transition-none",
+                    isDraggingOver && "-translate-y-0.5 scale-110",
+                    isDisabled && "opacity-50",
+                )}
+            />
 
             <div className="flex flex-col gap-1 text-center">
                 <div className="flex justify-center gap-1 text-center">
@@ -219,18 +289,19 @@ export const FileUploadDropZone = ({
                         multiple={allowsMultiple}
                         onChange={handleInputFileChange}
                     />
-                    <label htmlFor={id} className="flex cursor-pointer">
-                        <Button color="link-color" size="md" isDisabled={isDisabled} onClick={() => inputRef.current?.click()}>
-                            Click to upload <span className="md:hidden">and attach files</span>
-                        </Button>
-                    </label>
-                    <span className="text-sm max-md:hidden">or drag and drop</span>
+                    {/* Presentational: the label around the whole box is what opens the picker, so
+                        a nested button here would fire it a second time. */}
+                    <span className="text-sm font-semibold text-brand-secondary">
+                        {isFileOverWindow ? "Drop the file here" : "Click to upload"}
+                        {!isFileOverWindow && <span className="md:hidden"> and attach files</span>}
+                    </span>
+                    {!isFileOverWindow && <span className="text-sm max-md:hidden">or drag and drop</span>}
                 </div>
                 <p className={cx("text-xs transition duration-100 ease-linear", isInvalid && "text-error-primary")}>
                     {hint || "SVG, PNG, JPG or GIF (max. 800x400px)"}
                 </p>
             </div>
-        </div>
+        </label>
     );
 };
 

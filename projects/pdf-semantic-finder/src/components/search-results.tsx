@@ -7,7 +7,7 @@
 import { ArrowLeft, ArrowRight } from "@untitledui/icons";
 import { Badge } from "@/components/base/badges/badges";
 import { Button } from "@/components/base/buttons/button";
-import type { SearchHit, SearchStatus } from "@/lib/types";
+import type { SearchHit, SearchMode, SearchStatus } from "@/lib/types";
 import { cx } from "@/utils/cx";
 
 export type SearchResultsProps = {
@@ -19,14 +19,43 @@ export type SearchResultsProps = {
     onSelect: (index: number) => void;
     errorMessage: string | null;
     locationErrorMessage: string | null;
+    /**
+     * Opens a neighbouring passage that travelled as context. Null when the caller cannot resolve
+     * one, which is the case for exact results.
+     */
+    onOpenSegment?: (segmentId: string) => void;
     /** Physical pages that produced nothing to search, so an empty result can say so. */
     unsearchedPages: number[];
+    /**
+     * Pages whose layout spec §2 does not claim to handle. They were searched, so they are kept
+     * apart from `unsearchedPages` — saying they could not be searched would be untrue.
+     */
+    unsupportedLayoutPages: number[];
+    /** Which mode produced this result; an empty result means different things in each. */
+    mode: SearchMode;
 };
+
+/** "Page 3 could not be searched." / "Pages 3, 4 could not be searched." */
+const describePages = (pages: number[], plural: string, singular = plural): string =>
+    pages.length === 1 ? `Page ${pages[0]} ${singular}.` : `Pages ${pages.join(", ")} ${plural}.`;
 
 const STATUS_NOTE: Record<SearchStatus, string | null> = {
     matched: null,
     uncertain: "These passages may be related. Review them before relying on them.",
-    no_match: "No relevant passage was found.",
+    no_match: null,
+};
+
+/**
+ * What an empty result actually means, which is not the same in the two modes.
+ *
+ * Exact search found no such characters — a literal absence. Meaning search evaluated every
+ * passage and none reached the §7 threshold, which is a judgement with a number behind it and can
+ * be wrong in both directions. Saying "no relevant passage was found" for both read as a statement
+ * about the document rather than about the search.
+ */
+const emptyResultNote = (mode: SearchMode, everyPageSearched: boolean): string => {
+    const scope = everyPageSearched ? "the extracted text" : "the text that could be searched";
+    return mode === "exact" ? `No matching text was found in ${scope}.` : `No passage in ${scope} met the relevance threshold.`;
 };
 
 export const SearchResults = ({
@@ -38,6 +67,9 @@ export const SearchResults = ({
     errorMessage,
     locationErrorMessage,
     unsearchedPages,
+    unsupportedLayoutPages,
+    onOpenSegment,
+    mode,
 }: SearchResultsProps) => {
     if (!hasDocument) return null;
 
@@ -66,17 +98,24 @@ export const SearchResults = ({
                  * pages that were never searched keeps "no relevant passage" from being read as
                  * "the document does not say" (spec §10).
                  */}
-                <p className="text-sm text-tertiary">
-                    {unsearchedPages.length === 0 ? STATUS_NOTE.no_match : "No relevant passage was found in the text that could be searched."}
-                </p>
-                {unsearchedPages.length > 0 && (
+                <p className="text-sm text-tertiary">{emptyResultNote(mode, unsearchedPages.length === 0)}</p>
+                {unsearchedPages.length > 0 && <p className="text-sm text-warning-primary">{describePages(unsearchedPages, "could not be searched")}</p>}
+                {unsupportedLayoutPages.length > 0 && (
                     <p className="text-sm text-warning-primary">
-                        {unsearchedPages.length === 1
-                            ? `Page ${unsearchedPages[0]} could not be searched.`
-                            : `Pages ${unsearchedPages.join(", ")} could not be searched.`}
+                        {describePages(
+                            unsupportedLayoutPages,
+                            "use a layout this proof of concept does not fully support",
+                            "uses a layout this proof of concept does not fully support",
+                        )}
                     </p>
                 )}
-                <p className="text-xs text-quaternary">This does not prove the document has no answer.</p>
+                {/*
+                 * True of every search, because OCR is never run (spec §10). A page whose heading
+                 * is text and whose body is an image is not an excluded page — some text came off
+                 * it — so nothing above would mention it, and "no relevant passage" would read as
+                 * "the document does not say".
+                 */}
+                <p className="text-xs text-quaternary">Text inside images was not searched. This does not prove the document has no answer.</p>
             </div>
         );
     }
@@ -111,6 +150,38 @@ export const SearchResults = ({
                             </span>
                             <span className="line-clamp-4 text-sm text-secondary">{result.previewText}</span>
                         </button>
+
+                        {/*
+                         * The neighbours that travelled with this passage, on the selected result
+                         * only. §6.3 lets the model read them to resolve what the passage refers
+                         * to, so a clause whose limit lives next door — 前項の期限を守った場合に限り
+                         * — is unreadable without them.
+                         *
+                         * "Sent with", never "used": the response does not report which context
+                         * influenced the answer, and saying otherwise would invent evidence.
+                         */}
+                        {index === selectedIndex && (result.contextBefore !== undefined || result.contextAfter !== undefined) && (
+                            <details className="px-3 pb-1">
+                                <summary className="cursor-pointer py-1 text-xs text-quaternary select-none">Context sent with this passage</summary>
+                                <div className="flex flex-col gap-1.5 pt-1 pb-1">
+                                    {([result.contextBefore, result.contextAfter] as const).map(
+                                        (context, position) =>
+                                            context !== undefined && (
+                                                <button
+                                                    key={context.segmentId}
+                                                    type="button"
+                                                    onClick={() => onOpenSegment?.(context.segmentId)}
+                                                    disabled={onOpenSegment === undefined}
+                                                    className="rounded-lg px-2 py-1.5 text-left text-xs text-quaternary not-disabled:cursor-pointer not-disabled:hover:bg-primary_hover"
+                                                >
+                                                    <span className="font-semibold">{position === 0 ? "before" : "after"}</span>
+                                                    <span className="line-clamp-3"> {context.text}</span>
+                                                </button>
+                                            ),
+                                    )}
+                                </div>
+                            </details>
+                        )}
                     </li>
                 ))}
             </ol>

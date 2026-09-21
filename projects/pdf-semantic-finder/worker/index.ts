@@ -156,6 +156,7 @@ const handleSearch = async (request: Request, env: WorkerEnv): Promise<Response>
         requestId,
         status: ranked.status,
         results: ranked.results,
+        evaluations: ranked.evaluations,
         evaluatedSegmentCount: ranked.evaluatedSegmentCount,
         model: outcome.model,
         elapsedMs,

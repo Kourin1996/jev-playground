@@ -36,33 +36,73 @@ test.describe("real-world English document", () => {
         await page.locator('label:has-text("Exact text")').click();
         await page.getByLabel("Search query").fill(query);
         await page.getByLabel("Search query").press("Enter");
-        await page.waitForFunction(() => document.querySelectorAll("ol li").length > 0 || document.body.innerText.includes("No relevant passage"), null, {
-            timeout: 15_000,
-        });
+        await page.waitForFunction(
+            () => document.querySelectorAll("ol li").length > 0 || /No matching text was found|met the relevance threshold/u.test(document.body.innerText),
+            null,
+            {
+                timeout: 15_000,
+            },
+        );
     };
 
-    /** The physical page the current highlight sits on. */
-    const highlightedPage = async (page: Page) =>
-        Number(
-            await page
-                .locator(".pdf-finder-highlight")
-                .first()
-                .evaluate((node) => node.closest(".pdf-finder-page")?.getAttribute("data-page-number")),
-        );
+    /**
+     * The physical page the current highlight sits on.
+     *
+     * Read from the document for the same reason as `highlightPosition`: the span an exact-search
+     * highlight lives in is rebuilt whenever the text layer re-renders, so a handle resolved a
+     * moment earlier can already be detached.
+     */
+    const highlightedPage = async (page: Page) => {
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+            const number = await page.evaluate(
+                () => document.querySelector(".pdf-finder-highlight")?.closest(".pdf-finder-page")?.getAttribute("data-page-number") ?? null,
+            );
+            if (number !== null) return Number(number);
+            await page.waitForTimeout(100);
+        }
 
-    const highlightPosition = (page: Page) =>
-        page
-            .locator(".pdf-finder-highlight")
-            .first()
-            .evaluate((node) => {
-                const pageBox = node.closest(".pdf-finder-page")!.getBoundingClientRect();
+        throw new Error("no highlight was on screen to locate");
+    };
+
+    /**
+     * Highlight position as a fraction of its page box, so it is comparable across zoom levels.
+     *
+     * Read from the document rather than through a resolved element handle. An exact-search
+     * highlight is a span *inside* a text-layer element, and the effect that applies it tears the
+     * span down and rebuilds it whenever the layer re-renders — so a handle resolved a moment
+     * earlier can already be detached, and `closest()` returns null. Polling until a whole reading
+     * succeeds measures the highlight that is actually on screen.
+     *
+     * Both rectangles are read inside one evaluation: fetching them in separate round-trips lets a
+     * smooth scroll move one of them in between, which shows up as alignment drift that is not
+     * there.
+     */
+    const highlightPosition = async (page: Page) => {
+        const read = () =>
+            page.evaluate(() => {
+                const node = document.querySelector(".pdf-finder-highlight");
+                const pageElement = node?.closest(".pdf-finder-page");
+                if (node == null || pageElement == null) return null;
+
+                const pageBox = pageElement.getBoundingClientRect();
                 const box = node.getBoundingClientRect();
+                if (pageBox.width === 0) return null;
+
                 return {
                     left: (box.left - pageBox.left) / pageBox.width,
                     top: (box.top - pageBox.top) / pageBox.height,
                     pageWidth: pageBox.width,
                 };
             });
+
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+            const measured = await read();
+            if (measured !== null) return measured;
+            await page.waitForTimeout(100);
+        }
+
+        throw new Error("no highlight was on screen to measure");
+    };
 
     test("reports nine pages and stays within every declared limit", async ({ page }) => {
         await open(page);
@@ -175,7 +215,8 @@ test.describe("real-world English document", () => {
         await exactSearch(page, "zzz-not-present-zzz");
 
         await expect(page.locator("ol li")).toHaveCount(0);
-        await expect(page.getByText("No relevant passage was found")).toBeVisible();
+        // Exact search: a literal absence, not a judgement against a threshold.
+        await expect(page.getByText("No matching text was found")).toBeVisible();
     });
 
     test("resolves a meaning-search result on a later page back to its passage", async ({ page }) => {

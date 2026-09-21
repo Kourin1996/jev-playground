@@ -17,6 +17,7 @@ const segmentsFrom = (texts: string[], pageNumber = 1): PdfSegment[] => buildSeg
 const segment = (id: string, originalText: string, searchText: string, pageNumber = 1): PdfSegment => ({
     id,
     pageNumber,
+    ranges: [],
     originalText,
     searchText,
     itemIndexes: [0],
@@ -52,16 +53,21 @@ describe("exactSearch", () => {
     });
 
     it("finds a phrase that straddles two segments", () => {
-        // The packer puts these clauses in different segments, so a per-segment containment test
-        // cannot see a phrase that spans the join — even though the page plainly contains it.
-        // The first clause has to clear the 250-character floor, or the packer keeps both in one
-        // segment and there is no boundary for the phrase to straddle.
+        // Segmentation cuts at the 第4条 opener, so a per-segment containment test cannot see a
+        // phrase that spans the join — even though the page plainly contains it. The first clause
+        // is padded past the fragment threshold so it is a unit in its own right rather than
+        // being folded into the next one.
         const filler = "甲は、料金の改定を行う場合、相当な期間をもって乙に通知するものとする。";
         let first = "第3条（料金）乙は、本サービスの対価として、甲の定める月額料金を毎月末日までに支払うものとする。";
         while ([...first].length < LIMITS.minSegmentCharacters + 20) first += filler;
         first += "乙は遅延損害金を支払う。";
 
-        const texts = [first, "第4条（中途解約）乙は、契約期間の満了前であっても、本契約を解約することができる。"];
+        let second = "第4条（中途解約）乙は、契約期間の満了前であっても、本契約を解約することができる。";
+        // Both sides have to stand on their own: a trailing fragment is folded back into the
+        // clause before it, which would put the phrase inside one segment after all.
+        while ([...second].length < LIMITS.minSegmentCharacters + 20) second += filler;
+
+        const texts = [first, second];
         const lines = groupItemsIntoLines(block(700, texts));
         const segments = buildSegments([{ pageNumber: 1, lines }]);
 
@@ -75,6 +81,22 @@ describe("exactSearch", () => {
         if (outcome.ok) expect(outcome.hits).toHaveLength(1);
     });
 
+    it("finds a word whose dakuten was pushed onto the next line", () => {
+        // `buildPageIndex` separates lines with a newline so they do not fuse in the preview. When
+        // a halfwidth base ends one line and its mark starts the next, the page text holds
+        // `ｶ` + newline + `ﾞ` — and a fold that clusters on whatever sits immediately next in the
+        // input never composes them into the `ガ` the reader types.
+        const lines = groupItemsIntoLines(block(700, ["ｶ", "ﾞｲﾄﾞ"]));
+        const outcome = exactSearch([buildPageIndex(1, lines)], "ガイド");
+
+        expect(outcome.ok).toBe(true);
+        if (!outcome.ok) return;
+
+        expect(outcome.hits).toHaveLength(1);
+        // The evidence covers both items, because the base and the mark live in different ones.
+        expect(outcome.hits[0].ranges.map((range) => range.itemIndex)).toEqual([0, 1]);
+    });
+
     it("finds a phrase that straddles a line break", () => {
         const lines = groupItemsIntoLines(block(700, ["契約期間の満了前であっても、", "本契約を解約することができる。"]));
         const outcome = exactSearch([buildPageIndex(1, lines)], "であっても、本契約を");
@@ -83,15 +105,35 @@ describe("exactSearch", () => {
         if (outcome.ok) expect(outcome.hits).toHaveLength(1);
     });
 
-    it("reports the items a match covers, so the highlight follows the match", () => {
+    it("reports the characters a match covers, so the highlight follows the match", () => {
         const lines = groupItemsIntoLines(block(700, ["第1条 目的について定める。", "第2条 定義について定める。"]));
         const outcome = exactSearch([buildPageIndex(1, lines)], "定める。第2条");
 
         expect(outcome.ok).toBe(true);
         if (outcome.ok) {
-            // The phrase crosses the break, so both lines' items are highlighted.
-            expect(outcome.hits[0].itemIndexes).toEqual([0, 1]);
+            // The phrase crosses the line break, so both lines' items are covered.
+            expect(outcome.hits[0].ranges.map((range) => range.itemIndex)).toEqual([0, 1]);
+            // And only the matched characters within each, not the whole item.
+            expect(outcome.hits[0].ranges.every((range) => range.wholeItem)).toBe(false);
         }
+    });
+
+    it("distinguishes two occurrences inside one text item", () => {
+        // Both occurrences live in the same item, so item indexes alone cannot tell them apart —
+        // selecting either would light up the identical span.
+        const lines = groupItemsIntoLines(block(700, ["返金条件は第4条。返金申請は書面で行う。"]));
+        const outcome = exactSearch([buildPageIndex(1, lines)], "返金");
+
+        expect(outcome.ok).toBe(true);
+        if (!outcome.ok) return;
+
+        expect(outcome.hits).toHaveLength(2);
+        expect(outcome.hits[0].ranges).toHaveLength(1);
+        expect(outcome.hits[1].ranges).toHaveLength(1);
+        expect(outcome.hits[0].ranges[0].itemIndex).toBe(outcome.hits[1].ranges[0].itemIndex);
+        // Same item, different characters.
+        expect(outcome.hits[0].ranges[0].startOffset).toBe(0);
+        expect(outcome.hits[1].ranges[0].startOffset).toBe(9);
     });
 
     it("returns every occurrence rather than capping at the ranked-result limit", () => {
@@ -161,10 +203,39 @@ describe("limit checks", () => {
         expect(checkSegmentLimits(overLimit).map((violation) => violation.kind)).toContain("extracted_characters");
     });
 
-    it("keeps the character cap and the segment cap consistent", () => {
-        // Raising one without the other would let a document pass one check and fail the next.
-        // docs/spec.md §14.1 derives the segment floor from exactly this relationship.
-        expect(LIMITS.maxSegmentCount * LIMITS.minSegmentCharacters).toBe(LIMITS.maxExtractedCharacters);
+    it("derives the segment cap from the measured unit size", () => {
+        // The cap is what a full-size document is expected to produce, so a typical document
+        // passes both checks. docs/spec.md §14.1 records the measurements behind the 125.
+        expect(LIMITS.maxSegmentCount * LIMITS.typicalSegmentCharacters).toBe(LIMITS.maxExtractedCharacters);
+        // A shape rule, not a capacity average: it must stay well below the typical unit, or it
+        // starts merging real one-sentence clauses again.
+        expect(LIMITS.minSegmentCharacters).toBeLessThan(LIMITS.typicalSegmentCharacters);
+    });
+
+    it("accepts a request body a document at the character cap can actually produce", () => {
+        // Each segment's text travels three times: as itself and as both neighbours' context.
+        // Under 256 KiB the Worker rejected a full-size Japanese document the client had already
+        // accepted, and the reader saw a search error instead of a limit message.
+        const worstCaseBytes = 3 * LIMITS.maxExtractedCharacters * 4 + LIMITS.maxSegmentCount * 80;
+
+        expect(LIMITS.maxRequestBodyBytes).toBeGreaterThanOrEqual(worstCaseBytes);
+    });
+
+    it("can evaluate a document at the segment cap within the deadline it declares", () => {
+        // Capacity has to be servable, not just declarable: changing the cap or the batch size
+        // without the arithmetic would promise a search the deadline cannot finish.
+        //
+        // The comparison is against a measured round-trip rather than a round number. A real
+        // search of `assets/bitcoin.pdf` — 112 segments, 15 requests, 3 rounds — completed in
+        // 1,361 ms, so a round-trip runs about 450 ms against the live provider.
+        const observedRoundTripMs = 450;
+        const batches = Math.ceil(LIMITS.maxSegmentCount / LIMITS.maxSegmentsPerBatch);
+        const rounds = Math.ceil(batches / LIMITS.maxConcurrentRequests);
+        const budgetPerRound = LIMITS.searchDeadlineMs / rounds;
+
+        // Twice the observed time, so a slower document or one retry still fits. Unmeasured at the
+        // cap itself: no fixture comes anywhere near 500 segments.
+        expect(budgetPerRound).toBeGreaterThanOrEqual(observedRoundTripMs * 2);
     });
 
     it("reports the segment cap for a document that is short but heavily divided", () => {

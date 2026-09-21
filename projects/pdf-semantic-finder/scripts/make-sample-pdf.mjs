@@ -30,6 +30,20 @@ const densePage = (index) => {
 };
 
 /**
+ * A page of a document that lands just inside the character cap rather than past it.
+ *
+ * `densePage` deliberately overshoots so search is blocked; this one aims for roughly 4,700
+ * characters a page over ten pages — about 47,000 against the 50,000 limit — so the search is
+ * actually attempted. Numbered clauses keep the segmentation realistic rather than producing one
+ * enormous paragraph.
+ */
+const nearLimitPage = (index) => {
+    const sentence = "本条に定める事項について、甲および乙は誠実に協議のうえこれを決定するものとし、協議が調わない場合には別途定める手続によるものとする。";
+    const paragraphs = Array.from({ length: 28 }, (_, n) => `<p>第${index * 28 + n + 1}条　${sentence}${sentence}</p>`).join("");
+    return `<div class="${index === 0 ? "" : "pb"}">${paragraphs}</div>`;
+};
+
+/**
  * A minimal PDF that declares the standard security handler.
  *
  * The `/O` and `/U` strings are arbitrary, so the empty user password never validates and PDF.js
@@ -83,6 +97,48 @@ const DOCUMENTS = [
         // Spec §10: over a declared limit, the document still renders but search is blocked.
         name: "sample-over-limit-ja.pdf",
         source: async () => html(STYLE("5pt", "1.15", "8mm"), Array.from({ length: 9 }, (_, i) => densePage(i)).join("")),
+    },
+    {
+        /*
+         * The subject of the §11.1 evaluation set, deliberately not a document any heuristic was
+         * tuned on. Segmentation, thresholds and batching were all settled against
+         * `sample-contract.html` and `assets/bitcoin.pdf`; measuring quality on those reports the
+         * fit rather than the quality.
+         */
+        name: "eval-terms-ja.pdf",
+        source: async () => readFile(resolve(here, "eval-terms.html"), "utf8"),
+    },
+    {
+        /*
+         * A document just inside every declared limit, for timing a near-capacity search. The
+         * §6.4 deadline arithmetic has only ever been checked against documents a fraction of the
+         * size, so it is the one number the limits rest on that nothing measures.
+         */
+        name: "sample-near-limit-ja.pdf",
+        source: async () => html(STYLE("7pt", "1.4", "12mm"), Array.from({ length: 10 }, (_, index) => nearLimitPage(index)).join("")),
+    },
+    {
+        /*
+         * Spec §2 does not claim to handle side-by-side text. Extraction splits at the gutter so
+         * the columns do not fuse into one sentence, but the reading order between them is still
+         * row by row — so the page has to be reported rather than silently trusted.
+         *
+         * Built as two floated blocks rather than with CSS columns: `column-count` lays text out
+         * in a single flow, and the extracted item positions come out the same as a real
+         * two-column page either way.
+         */
+        name: "sample-two-column-ja.pdf",
+        source: async () => {
+            const column = (prefix) =>
+                Array.from(
+                    { length: 22 },
+                    (_, n) => `<p>${prefix}第${n + 1}項 本項に定める事項については、甲および乙が別途協議のうえ決定するものとする。</p>`,
+                ).join("");
+            return html(
+                `${STYLE("9pt", "1.7", "15mm")}.col{width:45%;float:left}.col+.col{margin-left:10%}`,
+                `<div class="col">${column("左")}</div><div class="col">${column("右")}</div>`,
+            );
+        },
     },
     {
         // Spec §10: a document PDF.js can open but that yields no text at all.

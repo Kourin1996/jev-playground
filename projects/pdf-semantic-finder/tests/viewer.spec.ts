@@ -56,7 +56,9 @@ test.describe("appearance", () => {
                     colorScheme: style.colorScheme,
                     body: getComputedStyle(document.body).backgroundColor,
                     heading: getComputedStyle(document.querySelector("h1")!).color,
-                    openPdf: getComputedStyle(document.querySelector("label span")!).backgroundColor,
+                    // The drop zone is the only control on an empty page; the header's Open PDF
+                    // button appears only once a document is loaded.
+                    dropZone: getComputedStyle(document.querySelector("[data-dropzone]")!).backgroundColor,
                 };
             });
 
@@ -104,17 +106,26 @@ test.describe("viewer", () => {
     /**
      * Highlight position as a fraction of its page box, so it is comparable across zoom levels.
      *
+     * Read from the document rather than through a resolved element handle. An exact-search
+     * highlight is a span *inside* a text-layer element, and the effect that applies it tears the
+     * span down and rebuilds it whenever the layer re-renders — so a handle resolved a moment
+     * earlier can already be detached, and `closest()` returns null. Polling until a whole reading
+     * succeeds measures the highlight that is actually on screen.
+     *
      * Both rectangles are read inside one evaluation: fetching them in separate round-trips lets a
      * smooth scroll move one of them in between, which shows up as alignment drift that is not
      * there.
      */
-    const highlightPosition = (page: Page) =>
-        page
-            .locator(".pdf-finder-highlight")
-            .first()
-            .evaluate((node) => {
-                const pageBox = node.closest(".pdf-finder-page")!.getBoundingClientRect();
+    const highlightPosition = async (page: Page) => {
+        const read = () =>
+            page.evaluate(() => {
+                const node = document.querySelector(".pdf-finder-highlight");
+                const pageElement = node?.closest(".pdf-finder-page");
+                if (node == null || pageElement == null) return null;
+
+                const pageBox = pageElement.getBoundingClientRect();
                 const box = node.getBoundingClientRect();
+                if (pageBox.width === 0) return null;
 
                 return {
                     left: (box.left - pageBox.left) / pageBox.width,
@@ -122,6 +133,15 @@ test.describe("viewer", () => {
                     pageWidth: pageBox.width,
                 };
             });
+
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+            const measured = await read();
+            if (measured !== null) return measured;
+            await page.waitForTimeout(100);
+        }
+
+        throw new Error("no highlight was on screen to measure");
+    };
 
     const respondWith =
         (results: string[], status = "matched") =>
@@ -183,12 +203,13 @@ test.describe("viewer", () => {
         await searchMeaning(page, "解約したらお金は戻りますか");
 
         await expect(page.locator(".pdf-finder-highlight").first()).toBeVisible();
-        const pageNumber = await page
-            .locator(".pdf-finder-highlight")
-            .first()
-            .evaluate((node) => node.closest(".pdf-finder-page")?.getAttribute("data-page-number"));
 
-        expect(Number(pageNumber)).toBe(expectedPage);
+        // Read from the document: the highlight span is rebuilt whenever the text layer re-renders.
+        await expect
+            .poll(async () =>
+                page.evaluate(() => document.querySelector(".pdf-finder-highlight")?.closest(".pdf-finder-page")?.getAttribute("data-page-number") ?? null),
+            )
+            .toBe(String(expectedPage));
     });
 
     test("repeated text highlights the occurrence the selected result represents", async ({ page }) => {
@@ -207,8 +228,39 @@ test.describe("viewer", () => {
         const second = await highlightText(page);
         const secondPosition = await highlightPosition(page);
 
-        expect(second).not.toBe(first);
+        // Character-level ranges mean both occurrences mark exactly the query and nothing else,
+        // so the marked text can no longer tell them apart — their positions have to. Folded
+        // before comparing: this fixture writes 行 as its compatibility form, which is precisely
+        // what normalization exists to see through.
+        const marked = (text: string) => text.replace(/\s+/gu, "").normalize("NFKC");
+        expect(marked(first)).toBe("返還は行わない");
+        expect(marked(second)).toBe("返還は行わない");
         expect(Math.abs(secondPosition.top - firstPosition.top)).toBeGreaterThan(0.01);
+    });
+
+    test("folds halfwidth and decomposed Japanese through the real viewer", async ({ page }) => {
+        // Unit tests pin the folding; this pins that the same folding is what the running
+        // application applies to a query typed into the real search box.
+        await openFixture(page);
+
+        await searchExact(page, "サービス");
+        await expect(page.locator("ol li")).not.toHaveCount(0);
+        const baseline = await page.locator("ol li").count();
+
+        // Halfwidth katakana: サ ー ヒ ゛ ス, with the dakuten as its own code point.
+        await searchExact(page, "ｻｰﾋﾞｽ");
+        await expect(page.locator("ol li")).toHaveCount(baseline);
+
+        // The same word written with a combining dakuten instead of a precomposed ビ.
+        await searchExact(page, "サーヒ\u3099ス");
+        await expect(page.locator("ol li")).toHaveCount(baseline);
+
+        // And a halfwidth handakuten, which folds the same way.
+        await searchExact(page, "パーセント");
+        const percent = await page.locator("ol li").count();
+        test.skip(percent === 0, "fixture does not contain パーセント");
+        await searchExact(page, "ﾊﾟｰｾﾝﾄ");
+        await expect(page.locator("ol li")).toHaveCount(percent);
     });
 
     test("the highlight stays aligned at 100%, 125%, and 150% zoom", async ({ page }) => {
@@ -352,7 +404,8 @@ test.describe("viewer", () => {
         await searchMeaning(page, "解約したらお金は戻りますか");
 
         await expect(page.getByText("The search could not be completed")).toBeVisible();
-        await expect(page.getByText("No relevant passage was found")).toHaveCount(0);
+        await expect(page.getByText("met the relevance threshold")).toHaveCount(0);
+        await expect(page.getByText("No matching text was found")).toHaveCount(0);
     });
 
     test("states what meaning search sends, without a dialog to dismiss", async ({ page }) => {

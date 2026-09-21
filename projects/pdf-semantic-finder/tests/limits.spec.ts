@@ -15,7 +15,8 @@ const BLANK_PAGE = resolve(here, "fixtures/sample-blank-page-ja.pdf");
 const OVER_LIMIT = resolve(here, "fixtures/sample-over-limit-ja.pdf");
 const ENCRYPTED = resolve(here, "fixtures/sample-encrypted.pdf");
 const NO_TEXT = resolve(here, "fixtures/sample-no-text.pdf");
-const ALL = [BLANK_PAGE, OVER_LIMIT, ENCRYPTED, NO_TEXT];
+const TWO_COLUMN = resolve(here, "fixtures/sample-two-column-ja.pdf");
+const ALL = [BLANK_PAGE, OVER_LIMIT, ENCRYPTED, NO_TEXT, TWO_COLUMN];
 
 test("the limit fixtures are present", () => {
     const missing = ALL.filter((path) => !existsSync(path));
@@ -71,7 +72,12 @@ test.describe("declared limits", () => {
         // The scope of the search and its result are two separate statements: an empty result over
         // part of a document must not read as "the document does not say".
         await expect(page.getByText("Page 2 could not be searched")).toBeVisible();
-        await expect(page.getByText("in the text that could be searched")).toBeVisible();
+        // A meaning search that finds nothing has made a judgement against a threshold; it has not
+        // established that the document says nothing. The wording says which of the two happened.
+        await expect(page.getByText("No passage in the text that could be searched met the relevance threshold")).toBeVisible();
+        // And the limit that holds on every page, not just the excluded ones: a page whose body is
+        // an image yields some text, so nothing above would mention it.
+        await expect(page.getByText("Text inside images was not searched")).toBeVisible();
     });
 
     test("blocks search on an over-limit document without truncating or requesting anything", async ({ page }) => {
@@ -120,6 +126,44 @@ test.describe("declared limits", () => {
         // Spec §10 is explicit that OCR is not a fallback, so the message says so.
         await expect(page.getByText("requires a text-based PDF")).toBeVisible();
         await expect(page.getByText("does not run OCR")).toBeVisible();
+    });
+
+    test("names a page whose layout it does not claim to handle", async ({ page }) => {
+        await open(page, TWO_COLUMN);
+        await page.waitForFunction(() => document.querySelectorAll(".textLayer span").length > 5);
+
+        // Extraction splits at the gutter so the columns do not fuse, but the order between them
+        // is still row by row. A comment claiming the page is reported is not the page being
+        // reported: it has to reach the reader.
+        await expect(page.locator("footer p")).toContainText("side-by-side text on page 1");
+    });
+
+    test("says the layout was not fully understood when a search finds nothing", async ({ page }) => {
+        await page.route("**/api/search", async (route) => {
+            const body = JSON.parse(route.request().postData() ?? "{}") as { documentId: string; requestId: string };
+            await route.fulfill({
+                json: {
+                    documentId: body.documentId,
+                    requestId: body.requestId,
+                    status: "no_match",
+                    results: [],
+                    evaluatedSegmentCount: 2,
+                    model: "jev-1.13.0",
+                    elapsedMs: 10,
+                },
+            });
+        });
+
+        await open(page, TWO_COLUMN);
+        await page.waitForFunction(() => document.querySelectorAll(".textLayer span").length > 5);
+
+        await page.locator('label:has-text("Meaning")').click();
+        await page.getByLabel("Search query").fill("ログインの方法は");
+        await page.getByRole("button", { name: "Search" }).click();
+
+        // Separate from "could not be searched": these pages were searched, just not understood.
+        await expect(page.getByText("does not fully support")).toBeVisible();
+        await expect(page.getByText("could not be searched")).toHaveCount(0);
     });
 
     test("issues no request while the reader is typing, or while moving between results", async ({ page }) => {

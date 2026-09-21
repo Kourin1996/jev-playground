@@ -9,7 +9,15 @@ import type { RequestSegment } from "./build-jev-request";
 import type { JevScoreAnswer } from "./validate";
 
 export type RankOutcome =
-    { ok: true; status: SearchStatus; results: SearchResultRecord[]; evaluatedSegmentCount: number } | { ok: false; code: SearchErrorCode };
+    | {
+          ok: true;
+          status: SearchStatus;
+          results: SearchResultRecord[];
+          /** Every segment's judgement, in document order. See `SearchResponse.evaluations`. */
+          evaluations: SearchResultRecord[];
+          evaluatedSegmentCount: number;
+      }
+    | { ok: false; code: SearchErrorCode };
 
 /**
  * Ranks evaluated segments and classifies the search.
@@ -57,6 +65,8 @@ export const rankResults = (segments: readonly RequestSegment[], answers: Readon
         ok: true,
         status,
         results: selected.slice(0, LIMITS.maxResults),
+        // `records` follows `segments`, which arrives in document order; `ranked` is a sorted copy.
+        evaluations: records,
         evaluatedSegmentCount: segments.length,
     };
 };

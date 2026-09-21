@@ -32,7 +32,7 @@ export const exactSearch = (pages: readonly PageIndex[], query: string): ExactSe
         findMatchesOnPage(page, normalizedQuery).map((match): SearchHit => ({
             key: `p${String(match.pageNumber).padStart(3, "0")}-o${String(match.searchStart).padStart(6, "0")}`,
             pageNumber: match.pageNumber,
-            itemIndexes: match.itemIndexes,
+            ranges: match.ranges,
             previewText: match.previewText,
         })),
     );

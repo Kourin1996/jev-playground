@@ -9,23 +9,84 @@ export const LIMITS = {
     maxFileBytes: 10 * 1024 * 1024,
     maxPageCount: 10,
     maxExtractedCharacters: 50_000,
-    maxSegmentCount: 200,
+    /**
+     * Derived from the measured median unit size, not from an assumed one.
+     *
+     * `maxExtractedCharacters / typicalSegmentCharacters` is `50,000 / 100 = 500`. See
+     * `typicalSegmentCharacters` for where 125 comes from. A document that stays inside the
+     * character cap but divides far more finely than that is rejected with its segment count
+     * named, the way every other declared limit behaves — it is never re-merged to fit.
+     */
+    maxSegmentCount: 500,
     maxSegmentCharacters: 800,
     maxQueryCharacters: 200,
-    maxRequestBodyBytes: 256 * 1024,
     /**
-     * Segmentation packs to at least this many characters before honoring a boundary.
+     * Derived from the character cap, not chosen: a document inside every client-side limit must
+     * never be rejected here, or the reader sees a search error where a limit message belongs.
      *
-     * Derived, not chosen: `maxExtractedCharacters / maxSegmentCount` is 250, so a document that
-     * fits the character budget also fits the segment budget. Without the floor, one segment per 項
-     * would trip the segment cap on an ordinary contract. `limits are consistent` in
-     * tests/search-client.test.ts pins the relationship. See the §5.2 deviation in docs/spec.md.
+     * Each segment's text travels three times — as itself, and as each neighbour's context — so
+     * the worst case is `3 × maxExtractedCharacters` characters. At 4 UTF-8 bytes each (a
+     * surrogate pair such as 𠮟 counts as one character and four bytes) that is 600,000, plus
+     * about 80 bytes of JSON per segment at `maxSegmentCount`, which is 640,000.
+     *
+     * This was 256 KiB, which a full-size Japanese document exceeded on context duplication
+     * alone: the Worker answered `request_body_too_large` for a document the client had already
+     * accepted. No test caught it because no fixture is anywhere near the character cap.
      */
-    minSegmentCharacters: 250,
+    maxRequestBodyBytes: 1024 * 1024,
+    /**
+     * Length below which a group is *considered* for merging into a neighbour.
+     *
+     * A secondary condition, never the deciding one. What decides is sentence-ending punctuation:
+     * a heading, a bare clause number, a figure label and a line of a formula carry none, while a
+     * clause that answers something ends in `。` however short it is. See `opensNextPassage` and
+     * `closesPreviousPassage` in `build-segments.ts`.
+     *
+     * Using length alone — first at 250, then at 40 — put five independent clauses into one search
+     * unit on a document of short 条, which is the very failure removing the 250-character floor
+     * was meant to end. 40 only bounds how much text a heading or a paragraph tail may carry
+     * before it counts as a passage in its own right.
+     */
+    minSegmentCharacters: 40,
+    /** A paragraph that reaches this length with no boundary in sight is cut anyway. */
     softMaxSegmentCharacters: 450,
-    maxSegmentsPerBatch: 8,
-    maxCharactersPerBatch: 6_000,
-    maxConcurrentRequests: 3,
+    /**
+     * Median characters per search unit, measured rather than assumed.
+     *
+     * 97 on `assets/bitcoin.pdf` (112 units over 21,129 characters) and 113 on the generated
+     * Japanese contract (13 units over 1,469). 100 sits between them. Only `maxSegmentCount` is
+     * derived from it; segmentation itself never consults it.
+     */
+    typicalSegmentCharacters: 100,
+    /**
+     * Passages in one request's state.
+     *
+     * Measured rather than chosen: growing the state from 1 passage to 8 halved the score of a
+     * passage Jev was unsure about (P(level 2) ≈ 0.50 → ≈ 0.25 on `assets/bitcoin.pdf`, ≈ 0.44 →
+     * ≈ 0.24 on the Japanese sample), while asking 8 questions instead of 1 over the same state
+     * changed nothing measurable. At 4 the movement was within or near the run-to-run spread of
+     * about 0.03 on the English sample. See docs/spec.md §14.19.
+     */
+    maxSegmentsPerBatch: 4,
+    /**
+     * Derived, so the character limit can never force a smaller batch than the count limit.
+     *
+     * `maxSegmentsPerBatch × maxSegmentCharacters × 3` — text plus two neighbours of context — is
+     * `4 × 800 × 3 = 9,600`. Every state therefore comes out the same size, which is the whole
+     * point of the packing. The previous 6,000 was below `8 × 800`, so the two limits were not
+     * simultaneously satisfiable and characters had to win (the old §14.4).
+     */
+    maxCharactersPerBatch: 10_000,
+    /**
+     * In-flight requests.
+     *
+     * Raised with the batch size cut: at the segment cap this is `ceil(500 / 4) = 125` requests,
+     * so 16 rounds, leaving about 940 ms per round-trip inside `searchDeadlineMs`. A real search
+     * of 112 segments measured about 450 ms per round-trip, so that is roughly twofold headroom —
+     * but no document near the cap has been timed, and more concurrency means more chance of a
+     * rate-limited response spending its one retry.
+     */
+    maxConcurrentRequests: 8,
     searchDeadlineMs: 15_000,
     maxResults: 3,
 } as const;
@@ -90,6 +151,16 @@ export type LinePiece = {
     start: number;
     /** Exclusive end offset in the line's text. */
     end: number;
+    /**
+     * Offset inside the *item* where this piece begins.
+     *
+     * Zero everywhere except in a part produced by `splitLongLine`, which is the only place a
+     * piece is cut. Without it a segment built from a cut piece can only name the item, so every
+     * part of a split item claims the whole of it.
+     */
+    itemOffset: number;
+    /** Full length of the item in code points, so a piece can tell whether it covers all of it. */
+    itemLength: number;
 };
 
 /** One reconstructed line of text, with the original item indexes it was built from. */
@@ -129,6 +200,14 @@ export type PdfSegment = {
      * matching string, which would resolve repeated passages to the wrong occurrence.
      */
     itemIndexes: number[];
+    /**
+     * Exactly the characters this segment covers, for highlighting.
+     *
+     * `itemIndexes` names whole items, which is wrong whenever one item is split across several
+     * segments: each would claim all of it, and selecting any one would light up all of them. A
+     * range still covers the whole passage — it is the passage, not a narrowed phrase.
+     */
+    ranges: TextRange[];
     contextBefore?: string;
     contextAfter?: string;
 };
@@ -142,16 +221,58 @@ export type SearchMode = "exact" | "meaning";
  * boundaries and so are not segments at all. Both reduce to a page, the items to highlight, and
  * some text to show, which is all the viewer and the results list ever needed.
  */
+/**
+ * A run of characters inside one text item.
+ *
+ * Exact search narrows to the matched characters, so two occurrences inside one item highlight
+ * differently. Meaning search spans whole items, which is what `wholeItem` expresses.
+ */
+export type TextRange = {
+    itemIndex: number;
+    /** Inclusive start offset into the item's `str`, or 0 when the whole item is covered. */
+    startOffset: number;
+    /** Exclusive end offset, or the item's length when the whole item is covered. */
+    endOffset: number;
+    /** True when the range is the entire item and offsets need not be consulted. */
+    wholeItem: boolean;
+};
+
+/** Covers an item completely, which is how meaning results address their evidence. */
+export const wholeItemRange = (itemIndex: number): TextRange => ({
+    itemIndex,
+    startOffset: 0,
+    endOffset: 0,
+    wholeItem: true,
+});
+
 export type SearchHit = {
     /** Stable across a result set, for list keys and selection. */
     key: string;
     pageNumber: number;
-    /** Original PDF.js text-item indexes to highlight, ascending. */
-    itemIndexes: number[];
+    /** Exactly what to highlight, in reading order. */
+    ranges: TextRange[];
     /** What the results list shows. */
     previewText: string;
     /** Present only for meaning results, which are whole segments. */
     segmentId?: string;
+    /**
+     * The neighbouring passages that travelled with this one, and which segment each of them is.
+     *
+     * Only for meaning results. A clause whose limit lives next door — `前項の期限を守った場合に限り`
+     * — cannot be read from the target alone, and §6.3 now permits the model to use the neighbours
+     * for exactly that. A reader who cannot reach them is worse off than the model was.
+     *
+     * The provider does not report which context it used, so this is what was **sent**, never what
+     * was relied on. The wording in the panel says so.
+     */
+    contextBefore?: SearchHitContext;
+    contextAfter?: SearchHitContext;
+};
+
+export type SearchHitContext = {
+    /** The neighbouring segment, so the reader can be taken to it in the document. */
+    segmentId: string;
+    text: string;
 };
 
 export type SearchStatus = "matched" | "uncertain" | "no_match";
@@ -182,6 +303,17 @@ export type SearchResponse = {
     requestId: string;
     status: SearchStatus;
     results: SearchResultRecord[];
+    /**
+     * Every evaluated segment in document order, not only the ranked few.
+     *
+     * `results` says what was chosen; this says what each passage was judged to be, including the
+     * passages that were rejected — which is the only way to see whether a passage was missed
+     * because Jev scored it low or because it was never a search unit in the first place. It feeds
+     * the extracted-text debug view and nothing else.
+     *
+     * Optional because it is diagnostic: a response without it is still a valid search result.
+     */
+    evaluations?: SearchResultRecord[];
     evaluatedSegmentCount: number;
     model: string;
     elapsedMs: number;

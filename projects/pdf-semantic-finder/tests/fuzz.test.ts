@@ -134,24 +134,47 @@ describe("normalizeForSearch", () => {
         }
     });
 
-    it("keeps offsets aligned with the normalization used for segments", () => {
+    it("folds the same way a whole-string pass does", () => {
+        // The independent implementation, written the obvious way with no offsets to preserve.
+        //
+        // Discarding comes first here as well, and that ordering is the contract rather than an
+        // implementation detail: a mark has to find its base whatever the PDF put between them.
+        // A reference that folded first would share the very defect it exists to catch, which is
+        // why `tests/segment.test.ts` also pins the specific pairs by hand.
+        const discard = (text: string) => text.replace(/[\u200B-\u200D\u2060\uFEFF]/gu, "").replace(/\s+/gu, "");
+        const wholeString = (text: string): string => discard(discard(text).normalize("NFKC").toLowerCase());
+
         const random = makeRandom(4242);
-        for (let attempt = 0; attempt < 400; attempt += 1) {
+        const pool = [...CHARS, "ｶ", "ｷ", "ﾊ", "ﾋ", "ﾞ", "ﾟ", "ｰ", "ｬ", "が", "ぱ", "\u3099", "\u309A", "ガ", "パ", "㈱"];
+
+        for (let attempt = 0; attempt < 3000; attempt += 1) {
             let text = "";
-            for (let k = 0; k < Math.floor(random() * 40); k += 1) text += CHARS[Math.floor(random() * CHARS.length)];
+            for (let k = 0; k < Math.floor(random() * 12); k += 1) text += pool[Math.floor(random() * pool.length)];
+
+            expect(normalizeForSearch(text)).toBe(wholeString(text));
+        }
+    });
+
+    it("maps every output character back to a real source range", () => {
+        const random = makeRandom(99);
+        const pool = [...CHARS, "ｶ", "ﾞ", "ﾟ", "ﾊ", "が", "\u3099"];
+
+        for (let attempt = 0; attempt < 500; attempt += 1) {
+            let text = "";
+            for (let k = 0; k < Math.floor(random() * 20); k += 1) text += pool[Math.floor(random() * pool.length)];
 
             const mapped = normalizeWithOffsets(text);
-            // One definition, two outputs: a drift here would make every match land on the wrong
-            // characters while still looking correct in the results list.
-            expect(mapped.text).toBe(normalizeForSearch(text));
-            expect(mapped.sourceIndex).toHaveLength([...mapped.text].length);
-            for (const index of mapped.sourceIndex) {
-                expect(index).toBeGreaterThanOrEqual(0);
-                expect(index).toBeLessThan([...text].length);
-            }
-            // Offsets never run backwards, so a match maps to a contiguous stretch of the source.
-            for (let i = 1; i < mapped.sourceIndex.length; i += 1) {
-                expect(mapped.sourceIndex[i]).toBeGreaterThanOrEqual(mapped.sourceIndex[i - 1]);
+            const length = [...text].length;
+
+            expect(mapped.sourceStart).toHaveLength([...mapped.text].length);
+            expect(mapped.sourceEnd).toHaveLength([...mapped.text].length);
+
+            for (let i = 0; i < mapped.sourceStart.length; i += 1) {
+                expect(mapped.sourceStart[i]).toBeGreaterThanOrEqual(0);
+                expect(mapped.sourceEnd[i]).toBeGreaterThan(mapped.sourceStart[i]);
+                expect(mapped.sourceEnd[i]).toBeLessThanOrEqual(length);
+                // Ranges never run backwards, so a match maps to a contiguous stretch of source.
+                if (i > 0) expect(mapped.sourceStart[i]).toBeGreaterThanOrEqual(mapped.sourceStart[i - 1]);
             }
         }
     });
@@ -167,12 +190,21 @@ describe("packBatches invariants", () => {
             }));
             const batches = packBatches(segments);
 
-            expect(batches.flat().map((entry) => entry.id)).toEqual(segments.map((entry) => entry.id));
+            // Every segment is asked about exactly once, in document order, whatever the padding.
+            expect(batches.flatMap((batch) => batch.evaluate).map((entry) => entry.id)).toEqual(segments.map((entry) => entry.id));
+
+            const stateSizes = new Set(batches.map((batch) => batch.state.length));
+            // One size for the whole search, so no passage is scored against a smaller state than
+            // its neighbours, and never more than a batch may hold.
+            expect(stateSizes.size).toBeLessThanOrEqual(1);
             for (const batch of batches) {
-                expect(batch.length).toBeGreaterThan(0);
-                expect(batch.length).toBeLessThanOrEqual(LIMITS.maxSegmentsPerBatch);
-                const characters = batch.reduce((total, entry) => total + countCharacters(entry.text), 0);
-                if (batch.length > 1) expect(characters).toBeLessThanOrEqual(LIMITS.maxCharactersPerBatch);
+                expect(batch.evaluate.length).toBeGreaterThan(0);
+                expect(batch.state.length).toBeLessThanOrEqual(LIMITS.maxSegmentsPerBatch);
+                expect(batch.state.length).toBeGreaterThanOrEqual(batch.evaluate.length);
+                // A state never repeats a passage: `state.passages` is keyed by segment ID.
+                expect(new Set(batch.state.map((entry) => entry.id)).size).toBe(batch.state.length);
+                const characters = batch.state.reduce((total, entry) => total + countCharacters(entry.text), 0);
+                expect(characters).toBeLessThanOrEqual(LIMITS.maxCharactersPerBatch);
             }
         }
     });

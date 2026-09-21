@@ -28,7 +28,13 @@ export type CallJevDependencies = {
     signal?: AbortSignal;
 };
 
-const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+/**
+ * Statuses worth a second attempt inside the deadline.
+ *
+ * `529` is TypeSafe's overloaded response and is the one that matters most here — it means "try
+ * again", and leaving it out turned a momentary overload into a failed search for the reader.
+ */
+const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504, 529]);
 
 /**
  * Parses `Retry-After`, which may be either a delay in seconds or an HTTP date.
@@ -95,7 +101,14 @@ const parseAnswers = (
  * rather than sleeping past the deadline.
  */
 export const callJevBatch = async (request: JevRequestBody, dependencies: CallJevDependencies): Promise<BatchOutcome> => {
-    const expectedSegmentIds = Object.keys(request.state.passages);
+    // Derived from the questions, not from `state.passages`. A batch's state is padded to a
+    // uniform size (see `packBatches`), so it carries passages no question was asked about and no
+    // answer will come back for. Expecting one answer per passage failed every padded request with
+    // `provider_malformed_response` — a defect only the real provider path can surface, because
+    // the end-to-end tests intercept `/api/search` and never reach this code.
+    const expectedSegmentIds = Object.keys(request.questions)
+        .map((questionKey) => fromQuestionKey(questionKey))
+        .filter((segmentId): segmentId is string => segmentId !== null);
     let attempt = 0;
 
     for (;;) {

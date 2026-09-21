@@ -208,7 +208,9 @@ export const groupItemsIntoLines = (items: readonly TextItemLike[]): ExtractedLi
 
             const start = characters.length;
             characters = characters.concat([...item.str]);
-            pieces.push({ itemIndex: index, start, end: characters.length });
+            // Built from the whole item, so the piece starts at its first character and runs to
+            // its last. Only `splitLongLine` ever cuts a piece short of that.
+            pieces.push({ itemIndex: index, start, end: characters.length, itemOffset: 0, itemLength: characters.length - start });
             previous = item;
         }
 

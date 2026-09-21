@@ -24,18 +24,18 @@ The example text is fictional and intended only for demonstrations.
 
 ## 2. Scope
 
-| Area                        | PoC requirement                                                                   |
-| --------------------------- | --------------------------------------------------------------------------------- |
-| Delivery                    | Standalone web app; no browser extension or Acrobat plugin                        |
-| Documents                   | One PDF at a time                                                                 |
-| File limit                  | 10 MB and 10 physical pages                                                       |
-| Extracted content           | At most 50,000 characters and 200 searchable segments                             |
-| Supported PDFs              | Extractable text, horizontal writing, single-column layout                        |
-| Primary evaluation language | Japanese                                                                          |
-| Search unit                 | A paragraph or short group of lines, called a segment                             |
-| Results                     | Up to three results ordered by relevance                                          |
-| Highlighting                | The complete selected segment; exact character-level highlighting is not required |
-| Persistence                 | PDF bytes, text, mappings, and results remain in browser memory only              |
+| Area                        | PoC requirement                                                                                                                      |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Delivery                    | Standalone web app; no browser extension or Acrobat plugin                                                                           |
+| Documents                   | One PDF at a time                                                                                                                    |
+| File limit                  | 10 MB and 10 physical pages                                                                                                          |
+| Extracted content           | At most 50,000 characters and 500 searchable segments                                                                                |
+| Supported PDFs              | Extractable text, horizontal writing, single-column layout; a page that appears to be multi-column is reported, not silently trusted |
+| Primary evaluation language | Japanese                                                                                                                             |
+| Search unit                 | A paragraph or short group of lines, called a segment                                                                                |
+| Results                     | Up to three results ordered by relevance                                                                                             |
+| Highlighting                | The complete selected segment for a meaning result; exact search highlights the matched characters                                   |
+| Persistence                 | PDF bytes, text, mappings, and results remain in browser memory only                                                                 |
 
 ### Out of scope
 
@@ -56,7 +56,7 @@ The page has a top search area, a results panel on the left, and a PDF viewer on
 
 ```text
 ┌──────────────────────────────────────────────────────────┐
-│ PDF Semantic Finder                         [Open PDF]  │
+│ PDF Semantic Finder     [View extracted text] [Open PDF] │
 ├──────────────────────────────────────────────────────────┤
 │ [If I cancel halfway, do I get my money back?] [Search]  │
 │  ○ Exact text     ● Meaning                              │
@@ -72,16 +72,19 @@ The page has a top search area, a results panel on the left, and a PDF viewer on
 └──────────────────────────────────────────────────────────┘
 ```
 
-| Action                       | Behavior                                                               |
-| ---------------------------- | ---------------------------------------------------------------------- |
-| Select or drop a PDF         | Validate it, render it, and extract text from every page               |
-| Press Enter or select Search | Run the selected mode; make no API call while typing                   |
-| Select Meaning               | Send all searchable segments to the application API for Jev evaluation |
-| Select Exact text            | Search locally; do not call Jev                                        |
-| Select a result              | Open its physical page and highlight that segment                      |
-| Select Previous or Next      | Move through existing results without another API call                 |
-| Open another PDF             | Discard the previous document, request, results, and highlight         |
-| Select View extracted text   | Show segment order, IDs, pages, and extracted text for debugging       |
+| Action                       | Behavior                                                                                                                                                                                                                                                               |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Select or drop a PDF         | Validate it, render it, and extract text from every page                                                                                                                                                                                                               |
+| Before a PDF is open         | The drop zone is the only control; the whole box opens the file picker                                                                                                                                                                                                 |
+| Drag a file over the page    | The drop zone responds from anywhere on the page, and a drop outside it is swallowed rather than opened by the browser                                                                                                                                                 |
+| Press Enter or select Search | Run the selected mode; make no API call while typing                                                                                                                                                                                                                   |
+| Select Meaning               | Send all searchable segments to the application API for Jev evaluation                                                                                                                                                                                                 |
+| Select Exact text            | Search locally; do not call Jev                                                                                                                                                                                                                                        |
+| Select a result              | Open its physical page; highlight the segment for a meaning result, or the matched characters for an exact one                                                                                                                                                         |
+| Expand a result's context    | Show the neighbouring passages that were sent with it, and open either of them. Labelled as what was sent, never as what the model used — the response does not report which context influenced the answer                                                             |
+| Select Previous or Next      | Move through existing results without another API call                                                                                                                                                                                                                 |
+| Open another PDF             | Discard the previous document, request, results, and highlight                                                                                                                                                                                                         |
+| Select View extracted text   | Show segment order, IDs, pages, extracted text, the context sent with each passage, and — after a meaning search — what every segment was judged to be, including the ones no result names. Layered over the viewer, which stays mounted so the reader's place is kept |
 
 Each result shows the physical page number and original extracted text. “Page 3” means the third page in the file, regardless of printed page numbers. Do not show generated explanations or unsupported precision such as “98% match.”
 
@@ -125,15 +128,35 @@ Keep every original PDF.js text-item index. Filtering whitespace or normalizing 
 
 ### 5.2 Segmentation heuristics
 
-| Step                      | Initial rule                                                               |
-| ------------------------- | -------------------------------------------------------------------------- |
-| Line reconstruction       | Group items using position and end-of-line data                            |
-| Reading order             | For supported layouts, order top to bottom and left to right within a line |
-| Boundaries                | Consider large vertical gaps, headings, and list-item starts               |
-| Target length             | Prefer 150–500 characters; enforce a maximum of 800                        |
-| Long paragraphs           | Split at line boundaries where possible                                    |
-| Conditions and exceptions | Keep continuations such as “however” with preceding text within the limit  |
-| Page boundaries           | Keep each segment within one physical page                                 |
+A segment plays three roles, and only the first shapes where the cuts fall:
+
+| Role               | What it is                                           | Carried by                                               |
+| ------------------ | ---------------------------------------------------- | -------------------------------------------------------- |
+| Search unit        | What a result points at and what the reader is shown | `originalText`                                           |
+| Evaluation context | The neighbouring units, sent so a reference resolves | `contextBefore` / `contextAfter`                         |
+| Evidence range     | What the highlight covers in the rendered page       | `ranges` (`TextRange[]`); `itemIndexes` remains for §5.3 |
+
+| Step                      | Initial rule                                                                                                                                                                                       |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Line reconstruction       | Group items using position and end-of-line data                                                                                                                                                    |
+| Reading order             | For supported layouts, order top to bottom and left to right within a line                                                                                                                         |
+| Boundaries                | Cut at large vertical gaps, headings, list-item starts, and 条/項 openers. Page statistics that describe "the body" are weighted by character count, so a figure's labels cannot outvote the prose |
+| Provisions                | A group opening `第N条/項/号`, `（N）`, `①` or a bullet is a passage and is never merged into a neighbour                                                                                          |
+| Fragments                 | Anything else that is short: with no sentence-ending punctuation it merges forward into the text it introduces, with one it merges back into the paragraph above                                   |
+| Long paragraphs           | Past 450 characters, close at the next line that finishes a sentence; at the 800 maximum, cut back to the last one                                                                                 |
+| Conditions and exceptions | Keep continuations such as “however” with preceding text within the limit                                                                                                                          |
+| Page boundaries           | Keep each segment within one physical page                                                                                                                                                         |
+
+There is no minimum length, and neither length nor punctuation decides on its own. **Opening a
+provision decides.** `第5条　返金不可` ends no sentence and is eight characters long, and is exactly
+the passage a reader wants; a heading, a figure label and a line of a formula are none of those
+things. Punctuation and the 40-character bound apply only to what is left over.
+
+`第N章` and a bare Latin `N.` are deliberately outside the provision class: they mark headings at
+least as often as provisions, and a heading belongs with the text it introduces. See §14.1.
+
+Capacity is enforced as a limit instead: a document that divides into more than `maxSegmentCount`
+units is rejected before search with its count named, never re-merged to fit.
 
 These are PoC heuristics, not a promise of correct reading order for arbitrary PDFs.
 
@@ -212,12 +235,16 @@ The example model is pinned for reproducible PoC evaluation. Confirm its availab
 
 | Setting                  | Initial value                                               |
 | ------------------------ | ----------------------------------------------------------- |
-| Segments per Jev request | At most 8                                                   |
-| Text per batch           | At most 6,000 characters including context                  |
-| Concurrent Jev requests  | At most 3                                                   |
+| Passages per Jev request | Exactly 4, or the whole document when it has fewer          |
+| Text per batch           | At most 10,000 characters including context                 |
+| Concurrent Jev requests  | At most 8 (see §14.1 for the arithmetic against the cap)    |
 | Whole-search deadline    | 15 seconds                                                  |
 | Automatic retry          | Once for a transient failure, within the same deadline      |
 | Partial batch failure    | Fail the search; never treat partial evaluation as no match |
+
+Every request in one search carries the same number of passages, because the size of the state
+measurably moves a score (§14.19). A final request with fewer passages to ask about is filled from
+passages elsewhere in the document; those carry no question and receive no answer.
 
 These are application limits, not official TypeSafe AI limits. Retry rate-limit and transient service failures with bounded backoff, respecting `Retry-After` when present.
 
@@ -229,12 +256,12 @@ Use the probability assigned to level 2 as the primary ranking value. Initial th
 | -------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------- |
 | Any segment has `P(level 2) >= 0.65`               | `matched`    | Show up to three qualifying results and open the highest ranked                                            |
 | No normal result, but any has `P(level 2) >= 0.35` | `uncertain`  | Show up to three uncertain results and open the highest ranked, with the uncertainty stated above the list |
-| Every segment has `P(level 2) < 0.35`              | `no_match`   | Show “No relevant passage was found”                                                                       |
+| Every segment has `P(level 2) < 0.35`              | `no_match`   | Say that nothing met the relevance threshold — never that the document has no answer                       |
 | Any segment is unevaluated or invalid              | Search error | Show “The search could not be completed”                                                                   |
 
 Sort by level-2 probability descending, weighted score descending, then physical page and segment order ascending. Never pad the list with weaker results.
 
-“No relevant passage was found” does not prove the document has no answer. The top three do not guarantee complete coverage.
+An empty result never claims the document has no answer, and the two modes mean different things by it: exact search found no such characters, while meaning search evaluated every passage and none reached the threshold. Both add that text inside images was never searched, because OCR is not run. The top three do not guarantee complete coverage.
 
 ## 8. Highlighting
 
@@ -290,6 +317,15 @@ type SearchResponse = {
         relevantProbability: number;
         confidence: number;
     }>;
+    // Every evaluated segment in document order, not only the ranked few. Diagnostic: it feeds the
+    // extracted-text view, which is the only place a passage's judgement is visible when no result
+    // names it. A response without it is still a valid search result.
+    evaluations?: Array<{
+        segmentId: string;
+        score: number;
+        relevantProbability: number;
+        confidence: number;
+    }>;
     evaluatedSegmentCount: number;
     model: string;
     elapsedMs: number;
@@ -304,9 +340,9 @@ The Worker validates:
 
 - a nonempty query of at most 200 characters;
 - unique, well-formed segment IDs;
-- at most 200 segments;
+- at most 500 segments;
 - nonempty target text of at most 800 characters per segment;
-- aggregate extracted-text limits and an initial 256 KB request-body limit;
+- aggregate extracted-text limits and a 1 MiB request-body limit, derived in §14.1;
 - one valid Jev answer for every requested segment;
 - finite scores and values in their expected ranges;
 - probabilities summing to 1 within a documented floating-point tolerance.
@@ -315,14 +351,15 @@ When a new search begins, abort the previous request when possible. Ignore respo
 
 ## 10. Errors, privacy, and logging
 
-| Condition                         | Behavior                                                       |
-| --------------------------------- | -------------------------------------------------------------- |
-| Corrupt or password-protected PDF | Stop loading and show the reason                               |
-| No extractable text               | Explain that the PoC requires a text-based PDF; do not run OCR |
-| Some pages have no text           | Identify excluded pages and search only extracted pages        |
-| A declared limit is exceeded      | Stop before search and show the limit; never silently truncate |
-| Jev is unavailable                | Retry within the deadline, then show a search error            |
-| Highlight mapping is unavailable  | Keep the result and report the display failure                 |
+| Condition                         | Behavior                                                                             |
+| --------------------------------- | ------------------------------------------------------------------------------------ |
+| Corrupt or password-protected PDF | Stop loading and show the reason                                                     |
+| No extractable text               | Explain that the PoC requires a text-based PDF; do not run OCR                       |
+| Some pages have no text           | Identify excluded pages and search only extracted pages                              |
+| A page appears to be multi-column | Name the page in the status bar and with an empty result; its text is still searched |
+| A declared limit is exceeded      | Stop before search and show the limit; never silently truncate                       |
+| Jev is unavailable                | Retry within the deadline, then show a search error                                  |
+| Highlight mapping is unavailable  | Keep the result and report the display failure                                       |
 
 Keep credentials in Worker secrets or server-side environment variables:
 
@@ -343,18 +380,54 @@ The disclosure is persistent and sits beside the mode selector. It does not requ
 
 ### 11.1 Search quality
 
-Prepare three fictional PDFs. Keep a fixed 20-query evaluation set separate from threshold-tuning examples.
+Keep a fixed evaluation set separate from the documents and examples any heuristic was tuned on.
+Measuring quality on the documents a rule was fitted to reports the fit, not the quality.
 
-| Category                  | Queries | Expected behavior                                 |
-| ------------------------- | ------: | ------------------------------------------------- |
-| Paraphrases               |       8 | Find the intended passage without shared keywords |
-| Denials and prohibitions  |       4 | Return negative statements as relevant            |
-| Conditions and exceptions |       4 | Place the relevant passage in the top three       |
-| No relevant information   |       4 | Do not produce a normal match                     |
+| Category                  | Expected behavior                                 |
+| ------------------------- | ------------------------------------------------- |
+| Paraphrases               | Find the intended passage without shared keywords |
+| Denials and prohibitions  | Return negative statements as relevant            |
+| Conditions and exceptions | Place the relevant passage in the top three       |
+| No relevant information   | Do not produce a normal match                     |
 
-Initial target: the correct segment appears in the top three for at least 15 of 16 answerable queries, and none of four no-answer queries produces `matched`. This is a target, not a measured result or guarantee for unseen PDFs.
+Three rates, counted separately rather than as one pass count, because the two directions of error
+cost different things — a miss sends the reader away believing the document does not say, a false
+positive costs them the time to read a passage and reject it:
 
-### 11.2 Functional behavior
+| Rate           | Definition                                                           |
+| -------------- | -------------------------------------------------------------------- |
+| Miss           | The answer is in the searchable text and the search returned nothing |
+| Top-3 hit      | The intended passage is among the results shown                      |
+| False positive | No answer exists and the search reported `matched`                   |
+
+**Measured.** `npm run eval`, 32 queries over two documents, one run:
+
+| Rate           |  Result |
+| -------------- | ------: |
+| Miss           |  0 / 26 |
+| Top-3 hit      | 26 / 26 |
+| False positive |   0 / 6 |
+
+By category: paraphrase 15/15, denial 5/5, condition 6/6, no-answer 6/6.
+
+The two documents answer different objections. `eval-terms-ja.pdf` is a fictional Japanese
+terms-of-service document generated for this purpose and used for nothing else, so no heuristic was
+fitted to it. `bitcoin.pdf` is the opposite: the segmentation _was_ tuned on it, but its eighteen
+queries were written by an outside reviewer against the paper's own sections rather than by anyone
+who had seen the code.
+
+**The outside queries earned their place on the first run.** They exposed a defect nothing else
+had: on the two pages whose figures carry more lines than their prose, the median font size came
+out as the label font, so every line of prose read as a heading and the page was split line by
+line. Every answer arrived cut mid-sentence — `incrementing a nonce in the` in one segment and
+`block until a value is found…` in the next. §14.1 records the fix.
+
+**What this still does not establish.** One run, two documents, and every query written by someone
+who had read the document first. It says the mechanism reaches the intended passage; it does not
+calibrate §7's thresholds, which would need enough queries falling near 0.35 and 0.65 to show where
+they belong. Nor does it cover a document neither party has seen.
+
+### 11.2 Functional behavior### 11.2 Functional behavior
 
 | Test                         | Pass condition                                                |
 | ---------------------------- | ------------------------------------------------------------- |
@@ -439,27 +512,111 @@ The PoC is complete when a reader can use their own words to find where to read 
 This section records where the implementation had to settle a question this specification left
 open or self-inconsistent. Each item is a deviation to review, not a silent redefinition.
 
-### 14.1 Segment length, and what the §2 caps do and do not guarantee
+### 14.1 Segment length: what shapes a search unit, and what the §2 caps guarantee
 
-**Why a minimum exists.** `maxExtractedCharacters / maxSegmentCount` is `50,000 / 200 = 250`.
-Splitting at every boundary candidate produces roughly one segment per 項, and a document at the
-character cap would emit several hundred, so segmentation packs to a floor of 250 rather than
-splitting, with a soft target of 450 and the §5.2 hard maximum of 800.
+**A capacity average used to shape passages, and no longer does.** The first implementation packed
+lines until a floor of 250 characters was reached before honoring any boundary. That floor was
+`maxExtractedCharacters / maxSegmentCount` — an average derived from a budget, not a property of
+legal or technical prose. It merged clauses to hit a number: a question answered by one sentence
+came back presented as three articles, and the highlight covered all three.
 
-**The floor is not a guarantee.** It bounds a _typical_ segment, not every one. The last group on a
-page is flushed whatever its length, and a line that would breach the hard maximum forces a break
-before the floor is reached, so segments below 250 are normal — the three-page sample has segments
-of 211, 234 and 185 characters. A document inside the character budget can therefore still exceed
-200 segments. The two caps are independent limits, both enforced before search
-(`check-limits.ts`, and again in the Worker), and either can reject a document the other would
-admit.
+**What shapes a unit now.** Boundaries alone: a paragraph gap, a heading, a list marker, a 条/項
+opener. There is no minimum length. The only length rules left are the §5.2 hard maximum of 800
+and a soft cut at 450 for a paragraph that never offers a boundary.
 
-**Cost.** A segment can span two or three adjacent clauses, so a highlight covers more text than
-strictly necessary. §2 already states that exact character-level highlighting is not required. The
-effect on **recall is unmeasured**: merging clauses could equally help or hurt, and only the §11.1
-evaluation set can say which. Earlier revisions of this document asserted recall was unaffected on
-the grounds that §6.2 level 2 is a containment test; that reasoning confuses a definition with a
-model's ability to satisfy it, and is withdrawn.
+**Three rules in a row merged independent clauses, each for the same reason.** A 250-character
+floor did it, then a 40-character one, then sentence-ending punctuation — every time because one
+heuristic was standing in for "is this a provision", and each replacement failed on the population
+the previous one happened to cover:
+
+```
+floor 250      第3条 … 第5条 merged
+floor 40       第4条　中途解約はできない。 … 第8条 merged
+punctuation    第5条　返金不可 … 第8条　準拠法は日本法 merged   ← none of these ends a sentence
+```
+
+The signal is the provision marker itself. A group opening `第N条/項/号`, `（N）`, `①` or a bullet
+is a passage and is never merged in either direction; punctuation and length decide only for what is
+left over:
+
+| Group                         | Provision | Ends a sentence | Direction                             |
+| ----------------------------- | --------- | --------------- | ------------------------------------- |
+| `第5条　返金不可`             | yes       | no              | stands alone, at eight characters     |
+| `第2章 利用条件`              | no        | no              | forward, into the text it introduces  |
+| `4. Proof-of-Work`            | no        | no              | forward, likewise                     |
+| `ownership.` (a wrapped tail) | no        | yes             | backward, into the paragraph above it |
+
+`第N章` and a bare Latin `N.` are outside the provision class on purpose: they mark headings at
+least as often as provisions, and a heading belongs with the text it introduces. The cost is that a
+Latin numbered clause too short to end a sentence would still be merged; this is a Japanese-first
+PoC (§2), where 条/項/号 and （N）/① mark a provision unambiguously.
+
+The `ownership.` row is the counterpart defect: an orphaned last line of a wrapped paragraph ends a
+sentence, so a forward-only rule left the Bitcoin whitepaper with a unit consisting of that single
+word. 40 characters survives only as a bound on how much text a fragment may carry.
+
+**A figure's labels were deciding what the body font size was.** Three of the page statistics
+describe "the body", and a plain median only says that when body lines are in the majority. On
+pages 2 and 8 of `assets/bitcoin.pdf` the diagram labels and the references outnumber the prose, so
+the median font size came out as the label font — 8.65 against the body's 10.09 — and **every line
+of prose was larger than "the body size" and therefore a heading**. Those pages came back as twenty
+consecutive one-line segments, each cut mid-sentence:
+
+```
+…the public key of the next owner │ and adding these to the end of the coin. A payee can verify…
+…incrementing a nonce in the      │ block until a value is found that gives the required zero bits…
+```
+
+Both statistics are now weighted by character count, so a 90-character line outweighs a
+four-character label. This was found by an evaluation set written by someone outside the project
+(§11.1); nothing the project wrote for itself had caught it in four rounds.
+
+**The soft cut was not closing at an opportunity either.** §5.2 says "past 450 characters, close at
+the next opportunity", and the implementation closed at the next _line_ — which in justified prose
+is wherever the measure ran out. It now waits for a line that finishes a sentence. The 800-character
+maximum is still absolute, but when it fires it cuts back to the last full stop and carries the
+trailing lines into the next unit rather than stranding half a sentence at the end of this one.
+
+**Measured effect.** `assets/bitcoin.pdf` goes from 61 units to **86** (median 82 characters,
+longest 782); the generated three-page Japanese contract goes from 6 to **13** (median 113,
+shortest 74, one 条 per unit). Both are pinned by tests, so a further change has to be acknowledged
+rather than noticed later. Fourteen places on the whitepaper still divide mid-sentence; all but one
+are inside the C listing, the Poisson formula and the probability table, where there are no
+sentences to divide.
+
+**Capacity became a limit instead of a force.** `maxSegmentCount` is now `maxExtractedCharacters /
+typicalSegmentCharacters` = `50,000 / 100 = 500`, where 100 is the midpoint of the two medians
+above. A document that stays inside the character cap but divides far more finely is **rejected
+before search with its count named**, the way every other declared limit behaves. The two caps
+remain independent, both enforced before search (`check-limits.ts`, and again in the Worker), and
+either can reject a document the other would admit.
+
+**What the cap costs elsewhere.** More units means more requests, and §14.19 forced the batch down
+from 8 passages to 4, which doubles them again. At the cap that is `ceil(500 / 4) = 125` requests;
+`maxConcurrentRequests` rose from 5 to 8, so 16 rounds, leaving about 940 ms per round-trip inside
+the 15 s deadline. A real search of the 86-unit whitepaper took 22 requests and 1,055 ms — 3 rounds,
+so about 350 ms each — which is the measurement the arithmetic is checked against.
+
+**Measured near the cap.** `tests/fixtures/sample-near-limit-ja.pdf` — 10 pages, 280 units, inside
+every declared limit — produces 70 requests and completed in **2,503 / 2,318 / 2,063 ms** over three
+runs, all well inside the 15-second deadline. That is 9 rounds at concurrency 8, so roughly 250 ms
+per round-trip, consistent with the 350 ms measured on the whitepaper.
+
+Still unmeasured: a document at the 500-unit cap itself, and what happens when a request is
+rate-limited and spends its one retry.
+
+**Request size.** Each unit's text travels three times — as itself and as each neighbour's context
+— so the worst case is `3 × 50,000` characters. At 4 UTF-8 bytes each plus about 80 bytes of JSON
+per segment that is 640,000, so §9.3's body limit is 1 MiB. It was 256 KiB, which a full-size
+Japanese document exceeded on context duplication alone: the Worker answered
+`request_body_too_large` for a document the client had already accepted, and the reader saw a
+search error where a limit message belonged. No fixture is anywhere near the character cap, so no
+test caught it; `search-client.test.ts` now pins the arithmetic instead.
+
+**Cost of the new shape.** Smaller units mean a highlight covers less text than before, which is
+the point, but also that a claim spread over two clauses is now split across two units and each is
+judged without the other — the context sent alongside is the only thing holding them together. The
+effect on **recall is unmeasured** in both directions; only the §11.1 evaluation set can say.
 
 ### 14.2 Ranking ties: §7 needs an ordering §9.2 withholds
 
@@ -480,11 +637,18 @@ opaque.
 the level number line with each level weighted by its probability. `relevantProbability` is
 `probabilities["2"]` and `confidence` is Jev's `confidence`.
 
-### 14.4 Batch limits: §6.4's two limits are not simultaneously satisfiable
+### 14.4 Batch limits are now simultaneously satisfiable, and have to be
 
-Eight segments of the §9.3 maximum 800 characters is 6,400 characters, above §6.4's 6,000-character
-batch limit. Batching packs by characters first and caps the count at eight. A segment that cannot
-fit a batch even alone is sent on its own; nothing is dropped or truncated.
+This section used to record that eight segments of the §9.3 maximum 800 characters is 6,400,
+above §6.4's 6,000-character batch limit, so packing had to put characters first and the count
+second.
+
+That is no longer acceptable, because §14.19 made a **uniform** state size the point of the
+packing: if characters could force a smaller batch, some passages would be judged against a smaller
+state than their neighbours and the thresholds would mean different things within one result list.
+`maxCharactersPerBatch` is therefore derived rather than chosen —
+`maxSegmentsPerBatch × maxSegmentCharacters × 3` (text plus two neighbours of context) is
+`4 × 800 × 3 = 9,600`, and the limit is 10,000. The count is what binds, always.
 
 ### 14.5 What `segments[].text` carries, and the context that travels with it
 
@@ -492,17 +656,47 @@ fit a batch even alone is sent on its own; nothing is dropped or truncated.
 **`originalText`**. `searchText` is lowercased, NFKC-folded and stripped of whitespace, which would
 turn `（株）` into `(株)` and `①` into `1` — changes that hurt a judgement about legal text.
 
-`contextBefore` and `contextAfter` **are sent**, and the instructions carry the sentence §6.3
-prescribes for that case: the neighbours resolve what the target refers to, and cannot make it
-relevant when the information is absent from the target itself. Without them a clause split by a
-page break leaves the target saying something incomplete, and a reference such as 前項 means
-nothing in isolation.
+`contextBefore` and `contextAfter` **are sent**. Without them a clause split by a page break leaves
+the target saying something incomplete, and a reference such as 前項 means nothing in isolation.
 
-They cost batch budget — `packBatches` bills context against the 6,000-character limit — so a
+**What the instructions allow changed, deliberately and unmeasured.** They used to say the
+neighbours "cannot make the target relevant when the requested information is absent from the
+target itself", which rejects the passage a reader actually needs. Given
+`前項の期限を守った場合に限り、既払料金を返還する` and the query "how many days' notice do I need
+to get a refund?", the number of days is in the previous clause — so the refund clause was
+forbidden from being relevant, the notice clause says nothing about refunds, and a document that
+plainly answers came back as `no_match`. Finer search units (§14.1) make that more likely, not less.
+
+The instructions now permit using the neighbours to understand what the target means and the
+conditions under which it applies, and forbid only the case the old rule was aimed at: marking the
+target relevant when the answer appears **only** in a neighbour and the target has nothing to do
+with it.
+
+The effect on ranking is **not measured**. An eight-query set across both samples returned an
+identical top three before and after the change — which says the set contains no case the change
+was aimed at, not that the change is neutral.
+
+They cost batch budget — `packBatches` bills context against the 10,000-character limit — so a
 search takes more requests than its segment count suggests, and the §6.4 deadline has less room.
-Measured on the nine-page fixture: 61 segments now take **11 batches** and about 33,400 input
-tokens, against 8 batches before, with searches completing in roughly 1.0–1.4 s rather than
-0.3–1.0 s. At the 200-segment cap this direction of travel is what §6.4's deadline has to absorb.
+
+Measured against the real provider after the §14.1 change, one search each:
+
+| Document                                | Units | Requests | Billed characters | Request body | Search   |
+| --------------------------------------- | ----- | -------- | ----------------- | ------------ | -------- |
+| `assets/bitcoin.pdf` (9 pages, English) | 86    | 22       | 57,579            | 62,715 B     | 1,055 ms |
+| Japanese contract sample (3 pages)      | 13    | 4        | 4,741             | 12,007 B     | 269 ms   |
+
+Billed characters run about 2.8× the extracted text, which is the context duplication. The body is
+3.1 bytes per character for English and 8.2 for Japanese; extrapolated to the 50,000-character cap
+that is roughly 410 KB of Japanese, which is why §9.3's body limit had to be 1 MiB rather than
+256 KiB (§14.1).
+
+The Japanese sample's billed characters exceed its own text by more than context alone explains:
+its last request carries a padded state (§6.4), so four passages travel where one is asked about.
+That is the price of a uniform scale, and it is paid only by the final request of a search.
+
+At the 500-unit cap this direction of travel is what §6.4's deadline has to absorb, and **no
+document near that cap has been timed**.
 
 Whether context improves _results_ is **unmeasured**. On the same fixture the intended passages
 still surface, but level-2 probabilities came back slightly lower and the order within the top
@@ -511,24 +705,48 @@ finding; only the §11.1 evaluation set can say which way it moves recall.
 
 ### 14.6 Batch cross-contamination and prompt injection are mitigated, not solved
 
-§6.3 puts up to eight passages in one `state.passages` while asking eight separate questions, so
+§6.3 puts four passages in one `state.passages` while asking up to four separate questions, so
 every question can see all of them. The instructions say to judge only the named passage, and that
 state is untrusted data. Segment IDs are validated against `^p\d{3}-s\d{3}$` before any of them is
 interpolated into the instructions, which closes that injection route specifically.
 
 None of this is a guarantee. Jev 1.13's own documentation states that adversarial state can move an
-answer, and an instruction not to follow instructions is a mitigation, not a control. **No test
-measures any of it.** The open questions are whether a passage scores differently alone than in a
-batch, whether a neighbouring answer pulls it up, whether batch order matters, and whether text in
-the PDF can steer the judgement. They belong with the §11.1 evaluation work.
+answer, and an instruction not to follow instructions is a mitigation, not a control.
 
-### 14.7 Exact-search normalization removes whitespace
+Two of the four open questions here have now been measured against the real provider, and the
+answers are in §14.19: **the size of `state.passages` moves an uncertain passage's score downward**,
+while the number of questions asked over the same state does not, and no upward pull from a
+neighbouring answer was observed in the combinations tried. The remaining two — whether text inside
+the PDF can steer the judgement, and how either behaves adversarially rather than incidentally —
+are still unmeasured and belong with the §11.1 evaluation work.
+
+### 14.7 Exact-search normalization removes whitespace, and folds clusters rather than characters
 
 §6.1 requires deterministic normalization but does not define it. `normalizeForSearch` applies
 NFKC, strips zero-width characters, lowercases, and **removes whitespace entirely** rather than
 collapsing it. Japanese is written without word spaces and extraction still introduces them when a
 font changes mid-word, so `返 金` must match a query for `返金`. The cost is that an English query
 for "the cat" also matches "thecat", and that NFKC folds `①` to `1`.
+
+**Folding runs over clusters, not code points — and a revision that got this wrong shipped.**
+Carrying a match back to the text items it covers requires knowing which input character produced
+which output one, which a whole-string `normalize("NFKC")` cannot say. An earlier revision solved
+that by folding one code point at a time. Halfwidth katakana carries its dakuten as a separate code
+point, so `ｶ` and `ﾞ` folded separately to `カ` plus a combining mark, which never equals the `ガ` a
+query produces:
+
+| Query  | Document | Per code point | Whole string |
+| ------ | -------- | -------------- | ------------ |
+| `ｶﾞ`   | `ガ`     | no match       | match        |
+| `ﾊﾟ`   | `パ`     | no match       | match        |
+| `ﾍﾞｰｽ` | `ベース` | no match       | match        |
+
+That is a silent failure to match ordinary Japanese. Folding now runs over a base character
+together with the marks that combine with it (`U+3099`, `U+309A`, `U+FF9E`, `U+FF9F`), and each
+output character records the source **range** it came from, because one output character can come
+from several input ones. `tests/fuzz.test.ts` checks the result against an independent whole-string
+implementation over generated strings; `tests/viewer.spec.ts` checks the same folding through the
+running application.
 
 ### 14.8 Unsupported page rotation
 
@@ -583,7 +801,12 @@ Three modules the §12 tree has no place for:
 - `src/components/extracted-text-view.tsx` — the §3 debug view.
 
 `tests/` also gained `call-jev.test.ts`, `highlight.test.ts`, `search-client.test.ts`,
+`segment.test.ts`, `fuzz.test.ts`, `bitcoin.spec.ts`, `bitcoin-asset.spec.ts`, `limits.spec.ts`,
 `helpers.ts`, `fixtures/text-items.ts`, and `run-evaluation.ts`.
+
+`tests/bitcoin-asset.spec.ts` targets `assets/bitcoin.pdf` rather than the byte-identical copy in
+`tests/fixtures/`, so the document a reader is handed for a demonstration is the one the
+segmentation and highlighting numbers are measured against.
 
 Spec §11.3 asks for extraction to be recorded separately from semantic search. Both durations are
 measured in the client and shown in the status bar. They are durations only and carry no content.
@@ -634,4 +857,137 @@ that either — it is the best single passage's score.
 this project has no figure for how often a passage that does answer the query is missed, how often
 one that does not is returned, or how often the intended passage reaches the top three. TypeSafe's
 own Score documentation asks for thresholds to be validated against task-specific data; §11.1 is
-where that happens, and it is outstanding.
+where that happens, and it is outstanding. §14.19 adds a reason it cannot be skipped: the number a
+threshold is compared against depends on how the request was packed.
+
+### 14.17 Exact search highlights characters; meaning search highlights the unit
+
+§2 said character-level highlighting was not required, which was true of a meaning result — the
+evidence there is the whole passage. It was wrong for exact search. Two occurrences of a phrase
+inside one text item produced two list entries that highlighted the identical span, so pressing
+Next appeared to do nothing.
+
+A hit now carries `TextRange[]` — an item index plus a character range within that item, or a flag
+meaning the whole item. `page-index.ts` already knew the character span of each match and was
+collapsing it to item indexes; it keeps the offsets instead. `highlight.ts` rewrites the text
+div's content into slices and marks only the matched one, restoring the original text on clear —
+the technique PDF.js's own `TextHighlighter` uses.
+
+**Meaning results needed the same treatment, for a different reason.** A segment named whole items
+through `itemIndexes`, which is wrong whenever one text item ends up in several segments.
+
+To be precise about what is and is not subdivided, because the earlier wording read as a
+contradiction: **the original `TextItem` and its index are never changed, split or renumbered** —
+they are the one thing §8's mapping depends on. What gets divided is the _segment text_. A line
+longer than 800 characters is cut at item boundaries where it can be (§14.10); a single item longer
+than 800 characters is cut inside itself, which leaves several segments pointing at the same index.
+`ranges` records which part of that item each one covers, built from the `itemOffset` each
+`LinePiece` carries. A 2,000-character item becomes three segments, and each now highlights only its
+own third rather than all 2,000 characters.
+
+The range is still the whole passage — it is not narrowed to a phrase.
+
+A range that covers its whole item is marked `wholeItem`, so the ordinary case keeps the highlight
+class on the text-layer element instead of rewriting its children. That matters beyond tidiness: a
+rewritten element is torn down and rebuilt whenever the layer re-renders, which is why the zoom
+tests read the highlight from the document rather than holding a handle to it.
+
+Offsets still come from the extraction structure, never from a search of the rendered page, so
+§8's prohibition holds unchanged.
+
+### 14.18 A multi-column page is now actually reported
+
+§2 restricts supported PDFs to single-column layouts. Extraction detects a page whose baselines
+mostly carry side-by-side blocks and splits at the gutter so the columns do not fuse into one
+sentence — but the reading order between them is still row by row.
+
+That detection existed, and two code comments claimed the page "is reported rather than silently
+trusted". Nothing reported it: the list reached no part of the interface. It is now named in the
+status bar, and named again with an empty result, kept separate from the pages that could not be
+searched because these pages **were** searched — saying otherwise would be untrue. Pinned by
+`tests/limits.spec.ts` against a generated two-column fixture.
+
+### 14.19 Measured: the state moves an uncertain score, and a uniform passage count does not fix it
+
+The §14.6 questions, measured against the real provider. Conditions, so the numbers can be read for
+what they are: model `jev-1.13.0`; `assets/bitcoin.pdf` with the query "how does proof of work
+prevent an attacker from rewriting history" and the Japanese contract sample with
+`途中でやめたらお金は戻りますか`; targets chosen as passages whose P(level 2) sits between the two
+thresholds when evaluated alone; filler drawn from the same document; three runs of each condition.
+Run-to-run spread on a repeated single-passage request is about 0.03.
+
+**Round one — batch size.** P(level 2) for one passage, three runs each:
+
+| Condition                        | P(level 2)       |
+| -------------------------------- | ---------------- |
+| Alone                            | 0.46, 0.48, 0.49 |
+| Batch of 2                       | 0.33, 0.41, 0.43 |
+| Batch of 4                       | 0.33, 0.29, 0.32 |
+| Batch of 8                       | 0.19, 0.17, 0.17 |
+| Batch of 8, different neighbours | 0.16, 0.19, 0.18 |
+| Batch of 8, target placed last   | 0.22, 0.22, 0.24 |
+
+**Round two — the state or the question count?** The first round changed three things at once.
+Three conditions separate the first two:
+
+| Condition                               | `assets/bitcoin.pdf` | Japanese sample  |
+| --------------------------------------- | -------------------- | ---------------- |
+| A — state = target, 1 question          | 0.48, 0.54, 0.47     | 0.46, 0.42, 0.45 |
+| B — state = target + 7, **1** question  | 0.27, 0.26, 0.21     | 0.26, 0.26, 0.20 |
+| C — state = target + 7, 8 questions     | 0.25, 0.31, 0.29     | 0.18, 0.18, 0.24 |
+| B4 — state = target + 3, **1** question | 0.47, 0.50, 0.41     | 0.28, 0.36, 0.32 |
+| C4 — state = target + 3, 4 questions    | 0.48, 0.44, 0.49     | 0.39, 0.39, 0.36 |
+
+**A → B is the whole effect; B → C is not measurable.** They all read the same state, and a larger
+state moves the answer. The instruction "other entries in state.passages … must not influence this
+judgement" does not hold.
+
+**Round three — does a uniform passage count make the judgements comparable?** It does not, and the
+earlier claim in this repository that it did was wrong. Holding the count at **four** and varying
+only what else differs between requests, reported as the §7 verdict rather than the score, because a
+score that moves inside one band changes nothing a reader sees:
+
+| Condition at four passages | One `assets/bitcoin.pdf` target  |
+| -------------------------- | -------------------------------- |
+| Alone (one passage)        | 0.59, 0.55, 0.48 → `uncertain`   |
+| Three short neighbours     | 0.60, 0.63, 0.68 → `uncertain`   |
+| Three longest neighbours   | 0.41, 0.36, 0.26 → `uncertain`   |
+| Adjacent (text repeated)   | 0.25, 0.17, 0.28 → **`below`**   |
+| Distant (no repetition)    | 0.63, 0.66, 0.68 → **`matched`** |
+| Target placed last         | 0.18, 0.20, 0.20 → **`below`**   |
+| A different padding set    | 0.67, 0.68, 0.72 → **`matched`** |
+
+One passage, one query, one count — and the verdict spans all three bands, 0.18 to 0.72. Across
+three targets per document: **the verdict differed from the single-passage baseline in 9 of 18
+conditions on the whitepaper and 1 of 12 on the Japanese contract.**
+
+"Adjacent" and "distant" are worth separating out: a passage's own text appears a second time in the
+state when a neighbour carries it as `contextAfter`, and the two conditions differ by 0.4 in
+P(level 2) on the same target. Position matters too — the same target read `uncertain` first in the
+state and `below` last in it.
+
+**What this does not say.** Six targets, two queries, one model, filler chosen by position. No
+upward pull from a neighbouring answer was observed in any condition, and saturated passages
+(P = 0 or 1) did not move at all — but neither is established as a general property.
+
+**What changed, and what it is worth.** `maxSegmentsPerBatch` is 4 rather than 8, and every request
+in a search carries the same number of passages, filled from elsewhere in the document when the last
+one is short. That removes one known source of unfairness — the final batch used to be smaller, so
+whoever landed in it was scored against a smaller state for no reason but their position — at no
+cost. **It is not a uniform scale.** Length, content, ordering and context repetition all still vary
+between requests, and round three shows they move the verdict more often than the count ever did.
+The honest statement is: the passage count is no longer a variable; everything else still is.
+
+**A defect this surfaced.** `callJevBatch` derived the set of answers it expected from
+`state.passages`, so every padded request failed as `provider_malformed_response`. No end-to-end
+test could catch it: they all intercept `/api/search` and never reach that code. It now expects one
+answer per question asked.
+
+**A gap found while checking the retry contract.** `529` — the provider's "overloaded, try again" —
+was missing from the retryable statuses, so a momentary overload became a failed search instead of a
+retry. Added, with a test. There is no SDK here (raw `fetch`), so no automatic retry duplicates this
+one, and the deadline covers the waiting: a backoff that would run past it fails immediately rather
+than sleeping first.
+
+Reproduced with throwaway scripts, not committed ones: they send document text to TypeSafe AI and
+are not something `npm test` should do.

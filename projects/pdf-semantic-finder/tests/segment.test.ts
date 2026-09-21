@@ -4,7 +4,7 @@
  * Everything here runs on synthetic items; no PDF is involved.
  */
 import { describe, expect, it } from "vitest";
-import { buildSegments, formatSegmentId, normalizeForSearch } from "@/lib/pdf/build-segments";
+import { buildSegments, formatSegmentId, normalizeForSearch, normalizeWithOffsets } from "@/lib/pdf/build-segments";
 import { groupItemsIntoLines, looksMultiColumn, needsSeparatingSpace } from "@/lib/pdf/extract-text";
 import { LIMITS, countCharacters } from "@/lib/types";
 import type { TextItemLike } from "@/lib/types";
@@ -120,7 +120,41 @@ describe("normalizeForSearch", () => {
     });
 
     it("folds halfwidth katakana", () => {
-        expect(normalizeForSearch("ｶｲﾔｸ")).toBe(normalizeForSearch("カイヤク"));
+        expect(normalizeForSearch("ｶｲﾔｸ")).toBe("カイヤク");
+    });
+
+    it("folds halfwidth katakana carrying a dakuten", () => {
+        // `ｶ` and `ﾞ` only compose into `ガ` when folded together. Folding them separately yields
+        // `カ` plus a combining mark, which never matches a query typed as `ガ` — and halfwidth
+        // katakana with dakuten is ordinary Japanese, not an exotic case.
+        expect(normalizeForSearch("ｶﾞｲ")).toBe("ガイ");
+        expect(normalizeForSearch("ﾊﾟｰﾂ")).toBe("パーツ");
+        expect(normalizeForSearch("ﾍﾞｰｽ")).toBe("ベース");
+        // A decomposed sequence composes the same way.
+        expect(normalizeForSearch("か\u3099")).toBe("が");
+    });
+
+    it("folds a mark onto its base across anything extraction put between them", () => {
+        // Extraction inserts a space wherever the font changes mid-word, and a line break lands in
+        // the same position, so a base and its dakuten routinely arrive separated. Clustering on
+        // whatever sits immediately next in the input misses every one of these.
+        for (const [separator, name] of [
+            [" ", "space"],
+            ["\u3000", "ideographic space"],
+            ["\n", "line break"],
+            ["\u200B", "zero-width space"],
+        ] as const) {
+            expect(normalizeForSearch(`ｶ${separator}ﾞ`), `halfwidth dakuten across a ${name}`).toBe("ガ");
+            expect(normalizeForSearch(`ﾊ${separator}ﾟ`), `halfwidth handakuten across a ${name}`).toBe("パ");
+            expect(normalizeForSearch(`か${separator}\u3099`), `combining dakuten across a ${name}`).toBe("が");
+        }
+
+        // And the source range still spans everything the fold consumed, separator included, so a
+        // match can be carried back to the text items it covers.
+        const mapped = normalizeWithOffsets("あｶ ﾞい");
+        expect(mapped.text).toBe("あガい");
+        expect(mapped.sourceStart).toEqual([0, 1, 4]);
+        expect(mapped.sourceEnd).toEqual([1, 4, 5]);
     });
 
     it("matches across a space extraction introduced mid-word", () => {
@@ -143,22 +177,167 @@ describe("buildSegments", () => {
         `${marker}本サービスの利用者は、所定の手続に従い、当社の定める方法により申込みを行うものとする。` +
         "当社が承諾した時点で契約が成立し、利用者は当社の定める料金を支払う義務を負う。";
 
-    it("packs short clauses together instead of emitting one segment each", () => {
-        // Ten short clauses: splitting at every list-item start would emit ten segments and, on a
-        // full document, breach the 80-segment cap well inside the character budget.
-        const texts = Array.from({ length: 10 }, (_, index) => `（${index + 1}）利用者は当社に通知するものとする。`);
+    it("coalesces a run of fragments rather than emitting one unit per line", () => {
+        // Ten short lines that answer nothing on their own: no sentence ends anywhere, which is
+        // what a figure's labels, a formula, or a table of headings looks like after extraction.
+        // Evaluating ten of these would spend ten slots on fragments.
+        const texts = Array.from({ length: 10 }, (_, index) => `項目${index + 1} 区分 金額`);
         const segments = buildSegments([toPage(block(700, texts))]);
 
         expect(segments.length).toBeLessThan(10);
         expect(segments.length).toBeGreaterThan(0);
     });
 
-    it("reaches the derived minimum length where the text allows it", () => {
-        const texts = Array.from({ length: 12 }, (_, index) => `（${index + 1}）` + paragraph(""));
+    it("keeps short numbered clauses apart, however short they are", () => {
+        // The counterpart to the test above, and the reason length alone cannot decide. Each of
+        // these answers a different question in one sentence; merging them reproduces the defect
+        // the 250-character floor was removed to end, at a smaller number.
+        const texts = ["第4条　中途解約はできない。", "第5条　返金は行わない。", "第6条　契約期間は1年間とする。", "第7条　譲渡を禁止する。"];
         const segments = buildSegments([toPage(block(700, texts))]);
 
-        for (const segment of segments.slice(0, -1)) {
-            expect(countCharacters(segment.originalText)).toBeGreaterThanOrEqual(LIMITS.minSegmentCharacters);
+        expect(segments.map((segment) => segment.originalText)).toEqual(texts);
+    });
+
+    it("keeps short provisions apart even when none of them ends a sentence", () => {
+        // The third counterexample to the same defect. A 250-character floor merged these, then a
+        // 40-character one did, then a sentence-ending rule did — each time because one heuristic
+        // was standing in for "is this a provision". None of these ends in 。 and each answers a
+        // different question.
+        const texts = ["第5条　返金不可", "第6条　解約手数料無料", "第7条　譲渡禁止", "第8条　準拠法は日本法"];
+        const segments = buildSegments([toPage(block(700, texts))]);
+
+        expect(segments.map((segment) => segment.originalText)).toEqual(texts);
+    });
+
+    it("still folds a heading into the text it introduces, in either script", () => {
+        // The counterpart. `第N章` and a bare Latin `N.` mark headings at least as often as
+        // provisions, so they stay outside the protection and merge forward as before.
+        const japanese = buildSegments([
+            toPage(block(700, ["第2章 利用条件", "第1条（目的）本契約は、甲が乙に対して提供する本サービスの利用条件を定めることを目的とする。"])),
+        ]);
+        expect(japanese).toHaveLength(1);
+        expect(japanese[0].originalText.startsWith("第2章 利用条件")).toBe(true);
+        expect(japanese[0].originalText).toContain("本契約は、甲が乙に対して");
+
+        const latin = buildSegments([
+            toPage(
+                block(700, ["4. Proof-of-Work", "To implement a distributed timestamp server on a peer-to-peer basis, we will need a proof-of-work system."]),
+            ),
+        ]);
+        expect(latin).toHaveLength(1);
+        expect(latin[0].originalText.startsWith("4. Proof-of-Work")).toBe(true);
+        expect(latin[0].originalText).toContain("distributed timestamp server");
+    });
+
+    it("folds an orphaned paragraph tail back into the paragraph it came from", () => {
+        // A wrapped paragraph whose last line is a single word still ends a sentence, so the
+        // forward rule alone would let it stand — the Bitcoin whitepaper produced a unit
+        // consisting of the word "ownership." exactly that way. It belongs to the lines before it.
+        //
+        // The pitch is what makes this reproducible: the wider gaps on either side of the tail are
+        // paragraph boundaries, so the tail is closed into a group of its own before merging runs.
+        const items = [
+            line({ y: 700, text: "デジタル署名は所有権の移転を証明する手段として広く用いられており、本項の" }),
+            line({ y: 684, text: "定めもこれに従うものとする。当事者は本項の趣旨を尊重しなければならない" }),
+            line({ y: 668, text: "が、これを妨げる事情がある場合はこの限りでない。なお本項は例示である" }),
+            line({ y: 628, text: "所有権。" }),
+            line({ y: 588, text: "第9条（通知）甲は、乙に対し、書面により通知するものとする。通知は到達し" }),
+            line({ y: 572, text: "た時点で効力を生じるものとし、甲乙間に別段の合意がある場合を除く。" }),
+            line({ y: 556, text: "当事者は通知先の変更を相手方に速やかに届け出るものとする。" }),
+        ];
+        const segments = buildSegments([toPage(items)]);
+
+        expect(segments.some((segment) => segment.originalText === "所有権。")).toBe(false);
+        // Backward, not forward: it belongs to the paragraph above, not to the 第9条 below it.
+        const owner = segments.find((segment) => segment.originalText.includes("所有権。"));
+        expect(owner?.originalText).toContain("デジタル署名");
+        expect(owner?.originalText).not.toContain("第9条");
+    });
+
+    it("keeps a clause that answers on its own as its own unit", () => {
+        // Each of these clears the fragment threshold, so each stands alone. Under the old
+        // 250-character capacity floor all three were packed into one unit, and a question
+        // answered by the 中途解約 clause came back presented as three articles.
+        const clauses = [
+            "第3条（料金）乙は、本サービスの対価として、甲の定める月額料金を毎月末日までに支払うものとする。支払に要する費用は乙の負担とする。",
+            "第4条（中途解約）乙は、契約期間の満了前であっても、一箇月前までに書面で通知することにより、本契約を解約することができる。",
+            "第5条（返金）前条により解約した場合であっても、甲は既に受領した料金を返還しないものとする。ただし、甲の責めに帰すべき事由による場合はこの限りでない。",
+        ];
+        const segments = buildSegments([toPage(block(700, clauses))]);
+
+        expect(segments).toHaveLength(3);
+        expect(segments[1].originalText).toContain("第4条");
+        expect(segments[1].originalText).not.toContain("第5条");
+    });
+
+    it("attaches a heading to the text it introduces", () => {
+        // A heading on its own answers nothing, and it belongs ahead of its body rather than at
+        // the tail of the section before it. The clause opener on the next line is what closes the
+        // heading into a group of its own, so the merge is what has to put them back together.
+        const items = [
+            line({ y: 700, text: "第2章 利用条件" }),
+            line({ y: 684, text: "第1条（目的）本契約は、甲が乙に対して提供する本サービスの利用条件を定め" }),
+            line({ y: 668, text: "ることを目的とする。本サービスの内容は甲が別途定める利用案内による。" }),
+        ];
+        const segments = buildSegments([toPage(items)]);
+
+        expect(segments).toHaveLength(1);
+        expect(segments[0].originalText.startsWith("第2章 利用条件")).toBe(true);
+        // Standing alone would also start with the heading, so the body has to be in there too.
+        expect(segments[0].originalText).toContain("本契約は、甲が乙に対して");
+    });
+
+    it("does not let a figure's labels decide what the body font size is", () => {
+        // Page 2 of the Bitcoin whitepaper: the transaction diagram's labels outnumber the lines
+        // of prose, so the median font size came out as the label font and every line of prose was
+        // larger than "the body size" — and therefore a heading. The page came back as twenty
+        // consecutive one-line segments, each cut mid-sentence.
+        const prose = [
+            "We define an electronic coin as a chain of digital signatures. Each owner transfers the coin to the",
+            "next by digitally signing a hash of the previous transaction and the public key of the next owner",
+            "and adding these to the end of the coin. A payee can verify the signatures to verify the chain of",
+            "ownership.",
+        ];
+        const labels = ["Hash", "Verify", "Sign", "Owner 1's", "Owner 2's", "Public Key", "Private Key", "Transaction"];
+
+        const items = [
+            ...prose.map((text, index) => line({ y: 700 - index * 16, text })),
+            // More labels than prose lines, and smaller, which is what a diagram looks like.
+            ...labels.map((text, index) => line({ y: 600 - index * 16, text, fontSize: 8 })),
+        ];
+        const segments = buildSegments([toPage(items)]);
+
+        const opening = segments.find((segment) => segment.originalText.includes("We define an electronic coin"));
+        expect(opening?.originalText, "the prose was split line by line").toContain("A payee can verify the signatures");
+    });
+
+    it("waits for the end of a sentence before taking the soft cut", () => {
+        // 450 characters is "close at the next opportunity", and a line boundary is not one: lines
+        // in justified prose end wherever the measure runs out. Six 96-character lines put the
+        // soft limit inside the fifth, and the sentence does not finish until the sixth.
+        const run = "proof of work involves scanning for a value that when hashed begins with a number of zero bits, and";
+        const texts = [run, run, run, run, run, "the work required is exponential in the number of zero bits."];
+        const segments = buildSegments([toPage(block(700, texts))]);
+
+        expect(segments).toHaveLength(1);
+        expect(segments[0].originalText.endsWith("exponential in the number of zero bits.")).toBe(true);
+        expect(countCharacters(segments[0].originalText)).toBeGreaterThan(LIMITS.softMaxSegmentCharacters);
+    });
+
+    it("cuts back to the last full stop when the hard maximum is reached", () => {
+        // The hard maximum has to fall somewhere, but not mid-sentence. Twenty 42-character lines
+        // put the 800-character cap inside the last one, and the only full stop before it is on
+        // line 10 — so the nine lines after it belong to the next unit, not stranded at the end of
+        // this one. Fixed-width filler because the arithmetic is the point of the test.
+        const running = "あ".repeat(42);
+        const finished = `${"あ".repeat(41)}。`;
+        const texts = [...Array.from({ length: 9 }, () => running), finished, ...Array.from({ length: 9 }, () => running), finished];
+        const segments = buildSegments([toPage(block(700, texts))]);
+
+        expect(segments.length).toBeGreaterThan(1);
+        for (const segment of segments) {
+            expect(countCharacters(segment.originalText)).toBeLessThanOrEqual(LIMITS.maxSegmentCharacters);
+            expect(segment.originalText.endsWith("。"), `cut mid-sentence: …${segment.originalText.slice(-20)}`).toBe(true);
         }
     });
 
@@ -188,6 +367,43 @@ describe("buildSegments", () => {
 
         expect(segments.length).toBeGreaterThan(1);
         expect(allIndexes.length).toBe(new Set(allIndexes).size);
+    });
+
+    it("gives each part of a split item its own character range, not the whole item", () => {
+        // A single text item longer than the hard maximum is split into several segments, and
+        // `itemIndexes` can only say "item 0" for every one of them — so a meaning result would
+        // light up all 2,000 characters whichever part the reader selected.
+        const overlong = "あ".repeat(LIMITS.maxSegmentCharacters * 2 + 400);
+        const segments = buildSegments([toPage([line({ y: 700, text: overlong })])]);
+
+        expect(segments.length).toBeGreaterThan(2);
+        // Every part still claims the same item, which is why the indexes alone cannot separate them.
+        expect(new Set(segments.flatMap((segment) => segment.itemIndexes))).toEqual(new Set([0]));
+
+        // The ranges do separate them: each covers exactly its own part, end to end with no gap
+        // and no overlap, and none of them claims the whole item.
+        let expectedStart = 0;
+        for (const segment of segments) {
+            expect(segment.ranges).toHaveLength(1);
+            expect(segment.ranges[0].itemIndex).toBe(0);
+            expect(segment.ranges[0].startOffset).toBe(expectedStart);
+            expect(segment.ranges[0].endOffset - segment.ranges[0].startOffset).toBe(countCharacters(segment.originalText));
+            expect(segment.ranges[0].wholeItem).toBe(false);
+            expectedStart = segment.ranges[0].endOffset;
+        }
+        expect(expectedStart).toBe(countCharacters(overlong));
+    });
+
+    it("marks a segment that covers whole items as whole-item, so zooming does not rebuild it", () => {
+        // The ordinary case. Keeping the class on the text-layer element instead of rewriting its
+        // children is what lets a highlight survive a re-render of the layer.
+        const segments = buildSegments([toPage(block(700, [paragraph("第1条（目的）"), paragraph("第2条（定義）")]))]);
+
+        expect(segments.length).toBeGreaterThan(0);
+        for (const segment of segments) {
+            expect(segment.ranges.length).toBeGreaterThan(0);
+            expect(segment.ranges.every((range) => range.wholeItem)).toBe(true);
+        }
     });
 
     it("keeps a split part's text inside the items it claims", () => {

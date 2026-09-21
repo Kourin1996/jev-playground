@@ -12,7 +12,7 @@
  * rendered page.
  */
 import { normalizeWithOffsets } from "@/lib/pdf/build-segments";
-import type { ExtractedLine } from "@/lib/types";
+import type { ExtractedLine, TextRange } from "@/lib/types";
 
 /** Marks a character that belongs to no item, such as the separator between two lines. */
 const NO_ITEM = -1;
@@ -23,16 +23,19 @@ export type PageIndex = {
     originalText: string;
     /** For each code point of `originalText`, the item that produced it, or `NO_ITEM`. */
     itemIndexByCharacter: number[];
+    /** For each code point of `originalText`, its offset inside the item that produced it. */
+    offsetInItem: number[];
     /** `originalText` after search normalization. */
     searchText: string;
-    /** For each code point of `searchText`, its index in `[...originalText]`. */
-    sourceIndex: number[];
+    /** For each code point of `searchText`, the half-open range of `originalText` it folded from. */
+    sourceStart: number[];
+    sourceEnd: number[];
 };
 
 export type PageMatch = {
     pageNumber: number;
-    /** Items covered by the match, ascending — what the viewer highlights. */
-    itemIndexes: number[];
+    /** Exactly the characters matched, so two occurrences in one item differ. */
+    ranges: TextRange[];
     /** The matched text with a little of its surroundings, for the results list. */
     previewText: string;
     /** Start offset in the page's `searchText`, so two matches can be told apart. */
@@ -45,6 +48,7 @@ const PREVIEW_MARGIN = 60;
 export const buildPageIndex = (pageNumber: number, lines: readonly ExtractedLine[]): PageIndex => {
     const characters: string[] = [];
     const itemIndexByCharacter: number[] = [];
+    const offsetInItem: number[] = [];
 
     lines.forEach((line, lineNumber) => {
         if (lineNumber > 0) {
@@ -52,27 +56,31 @@ export const buildPageIndex = (pageNumber: number, lines: readonly ExtractedLine
             // is exactly what lets a query span the line break.
             characters.push("\n");
             itemIndexByCharacter.push(NO_ITEM);
+            offsetInItem.push(0);
         }
 
         const lineCharacters = [...line.text];
         // `pieces` records where each item landed in the line, so the lookup is a direct fill
         // rather than a second pass over the text.
         const owner = new Array<number>(lineCharacters.length).fill(NO_ITEM);
+        const within = new Array<number>(lineCharacters.length).fill(0);
 
         for (const piece of line.pieces) {
             for (let offset = piece.start; offset < piece.end && offset < owner.length; offset += 1) {
                 owner[offset] = piece.itemIndex;
+                within[offset] = offset - piece.start;
             }
         }
 
         characters.push(...lineCharacters);
         itemIndexByCharacter.push(...owner);
+        offsetInItem.push(...within);
     });
 
     const originalText = characters.join("");
-    const { text: searchText, sourceIndex } = normalizeWithOffsets(originalText);
+    const { text: searchText, sourceStart, sourceEnd } = normalizeWithOffsets(originalText);
 
-    return { pageNumber, originalText, itemIndexByCharacter, searchText, sourceIndex };
+    return { pageNumber, originalText, itemIndexByCharacter, offsetInItem, searchText, sourceStart, sourceEnd };
 };
 
 export const buildPageIndexes = (pages: readonly { pageNumber: number; lines: ExtractedLine[] }[]): PageIndex[] =>
@@ -97,21 +105,34 @@ export const findMatchesOnPage = (index: PageIndex, normalizedQuery: string): Pa
         if (start === -1) break;
 
         const end = start + normalizedQuery.length;
-        const covered = new Set<number>();
 
-        for (let offset = start; offset < end; offset += 1) {
-            const owner = index.itemIndexByCharacter[index.sourceIndex[offset]];
-            if (owner !== undefined && owner !== NO_ITEM) covered.add(owner);
+        // The matched characters, in source order, grouped into one range per item. Keeping the
+        // offsets is what lets two occurrences inside a single item highlight differently.
+        const firstOriginal = index.sourceStart[start];
+        const lastOriginal = index.sourceEnd[end - 1];
+        const ranges: TextRange[] = [];
+
+        for (let offset = firstOriginal; offset < lastOriginal; offset += 1) {
+            const itemIndex = index.itemIndexByCharacter[offset];
+            if (itemIndex === undefined || itemIndex === NO_ITEM) continue;
+
+            const within = index.offsetInItem[offset];
+            const last = ranges.at(-1);
+
+            if (last !== undefined && last.itemIndex === itemIndex && last.endOffset === within) {
+                last.endOffset = within + 1;
+                continue;
+            }
+
+            ranges.push({ itemIndex, startOffset: within, endOffset: within + 1, wholeItem: false });
         }
 
-        const firstOriginal = index.sourceIndex[start];
-        const lastOriginal = index.sourceIndex[end - 1];
         const previewStart = Math.max(0, firstOriginal - PREVIEW_MARGIN);
-        const previewEnd = Math.min(originalCharacters.length, lastOriginal + 1 + PREVIEW_MARGIN);
+        const previewEnd = Math.min(originalCharacters.length, lastOriginal + PREVIEW_MARGIN);
 
         matches.push({
             pageNumber: index.pageNumber,
-            itemIndexes: [...covered].sort((a, b) => a - b),
+            ranges,
             previewText:
                 (previewStart > 0 ? "…" : "") +
                 originalCharacters.slice(previewStart, previewEnd).join("").replace(/\s+/gu, " ").trim() +

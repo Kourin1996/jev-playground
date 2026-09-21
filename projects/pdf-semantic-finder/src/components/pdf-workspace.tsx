@@ -24,7 +24,7 @@ import type { PageIndex } from "@/lib/pdf/page-index";
 import { exactSearch } from "@/lib/search/exact-search";
 import { buildSearchRequest, requestSemanticSearch } from "@/lib/search/semantic-search";
 import type { PdfSegment } from "@/lib/types";
-import type { SearchErrorCode, SearchHit, SearchMode, SearchStatus } from "@/lib/types";
+import type { SearchErrorCode, SearchHit, SearchMode, SearchResultRecord, SearchStatus } from "@/lib/types";
 import { LIMITS } from "@/lib/types";
 
 /** No result is being shown in the viewer. */
@@ -57,6 +57,26 @@ const LOAD_ERROR_TEXT: Record<string, string> = {
     InvalidPDFException: "This file could not be read as a PDF.",
 };
 
+/**
+ * The segments a passage's `contextBefore` / `contextAfter` were taken from.
+ *
+ * `buildSegments` builds both from the adjacent groups on the same physical page, so the neighbour
+ * is recoverable from position and nothing extra has to travel to the Worker and back.
+ */
+const neighbourContext = (segments: readonly PdfSegment[], segment: PdfSegment): Pick<SearchHit, "contextBefore" | "contextAfter"> => {
+    const index = segments.indexOf(segment);
+    const sameDocumentPage = (candidate: PdfSegment | undefined) =>
+        candidate !== undefined && candidate.pageNumber === segment.pageNumber ? candidate : undefined;
+
+    const before = segment.contextBefore === undefined ? undefined : sameDocumentPage(segments[index - 1]);
+    const after = segment.contextAfter === undefined ? undefined : sameDocumentPage(segments[index + 1]);
+
+    return {
+        ...(before === undefined ? {} : { contextBefore: { segmentId: before.id, text: before.originalText } }),
+        ...(after === undefined ? {} : { contextAfter: { segmentId: after.id, text: after.originalText } }),
+    };
+};
+
 export const PdfWorkspace = () => {
     const [loaded, setLoaded] = useState<LoadedDocument | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -77,6 +97,13 @@ export const PdfWorkspace = () => {
     const [selectedIndex, setSelectedIndex] = useState(NO_SELECTION);
     const [searchError, setSearchError] = useState<string | null>(null);
     const [searchMs, setSearchMs] = useState<number | null>(null);
+    /**
+     * Every segment's judgement from the last meaning search, for the extracted-text view.
+     *
+     * Cleared with the rest of the search state, so it can never describe a document or a query
+     * that is no longer on screen.
+     */
+    const [evaluations, setEvaluations] = useState<Map<string, SearchResultRecord> | null>(null);
     const [highlightFailure, setHighlightFailure] = useState<HighlightTargetFailure | null>(null);
 
     const [scale, setScale] = useState(1);
@@ -96,6 +123,7 @@ export const PdfWorkspace = () => {
         setSelectedIndex(NO_SELECTION);
         setSearchError(null);
         setHighlightFailure(null);
+        setEvaluations(null);
     }, []);
 
     const openDocument = useCallback(
@@ -230,13 +258,19 @@ export const PdfWorkspace = () => {
                     .map((segment): SearchHit => ({
                         key: segment.id,
                         pageNumber: segment.pageNumber,
-                        itemIndexes: segment.itemIndexes,
+                        // Meaning results address whole items: the evidence is the segment.
+                        ranges: segment.ranges,
                         previewText: segment.originalText,
                         segmentId: segment.id,
+                        // Which segments the context strings came from, so the reader can be taken
+                        // to them. Recovered from position rather than carried in the response:
+                        // `buildSegments` takes context from the neighbours on the same page.
+                        ...neighbourContext(loaded.segments, segment),
                     }));
 
                 setStatus(outcome.response.status);
                 setResults(views);
+                setEvaluations(new Map((outcome.response.evaluations ?? []).map((record) => [record.segmentId, record])));
                 setSelectedIndex(views.length > 0 ? 0 : NO_SELECTION);
                 setSearchMs(Math.round(performance.now() - searchStartedAt));
             } catch (error) {
@@ -256,6 +290,41 @@ export const PdfWorkspace = () => {
         [loaded, query, resetSearchState],
     );
 
+    /**
+     * Opens a passage the reader reached through another result's context.
+     *
+     * It becomes the selected result rather than a search of its own: nothing is re-evaluated, and
+     * the status and the rest of the list stay as the search left them. Its own neighbours travel
+     * with it, so the reader can keep walking the document from there.
+     */
+    const openSegment = useCallback(
+        (segmentId: string) => {
+            if (loaded === null) return;
+            const segment = loaded.segments.find((candidate) => candidate.id === segmentId);
+            if (segment === undefined) return;
+
+            const hit: SearchHit = {
+                key: segment.id,
+                pageNumber: segment.pageNumber,
+                ranges: segment.ranges,
+                previewText: segment.originalText,
+                segmentId: segment.id,
+                ...neighbourContext(loaded.segments, segment),
+            };
+
+            setResults((current) => {
+                const existing = current.findIndex((entry) => entry.key === hit.key);
+                if (existing >= 0) {
+                    setSelectedIndex(existing);
+                    return current;
+                }
+                setSelectedIndex(current.length);
+                return [...current, hit];
+            });
+        },
+        [loaded],
+    );
+
     const limitMessage = useMemo(() => {
         if (loaded === null || loaded.limitViolations.length === 0) return undefined;
         return `${describeLimitViolation(loaded.limitViolations[0])} Search is unavailable for this document.`;
@@ -269,6 +338,12 @@ export const PdfWorkspace = () => {
         () => (loaded === null ? [] : [...new Set([...loaded.extraction.pagesWithoutText, ...loaded.extraction.rotatedPages])].sort((a, b) => a - b)),
         [loaded],
     );
+
+    /**
+     * Pages whose layout spec §2 does not claim to handle. Searched, but with a reading order
+     * that may be wrong — so they are reported separately from the pages that were not searched.
+     */
+    const unsupportedLayoutPages = useMemo(() => (loaded === null ? [] : loaded.extraction.multiColumnPages), [loaded]);
 
     const highlightMessage = useMemo(() => {
         if (highlightFailure === null) return null;
@@ -286,6 +361,7 @@ export const PdfWorkspace = () => {
                   `${loaded.segments.length} searchable segments`,
                   ...(loaded.extraction.pagesWithoutText.length > 0 ? [`no text on page ${loaded.extraction.pagesWithoutText.join(", ")}`] : []),
                   ...(loaded.extraction.rotatedPages.length > 0 ? [`unsupported rotation on page ${loaded.extraction.rotatedPages.join(", ")}`] : []),
+                  ...(loaded.extraction.multiColumnPages.length > 0 ? [`side-by-side text on page ${loaded.extraction.multiColumnPages.join(", ")}`] : []),
                   `extracted in ${loaded.extractionMs} ms`,
                   ...(searchMs === null ? [] : [`searched in ${searchMs} ms`]),
               ].join(" · ");
@@ -295,29 +371,34 @@ export const PdfWorkspace = () => {
             <div className="flex w-full max-w-300 flex-col">
                 <header className="flex items-center justify-between px-6 pt-5 pb-3">
                     <h1 className="text-lg font-semibold tracking-tight text-primary">PDF Semantic Finder</h1>
-                    <div className="flex items-center gap-2">
-                        {loaded !== null && (
+                    {/*
+                     * Both controls appear only once a document is open. Before that the drop zone
+                     * is the single affordance on the screen, and a second way to do the same thing
+                     * beside an empty page is noise.
+                     */}
+                    {loaded !== null && (
+                        <div className="flex items-center gap-2">
                             <Button size="sm" color="tertiary" onClick={() => setShowExtractedText((value) => !value)}>
                                 {showExtractedText ? "Hide extracted text" : "View extracted text"}
                             </Button>
-                        )}
-                        {/* The input is visually hidden but still focusable, so the ring is drawn on the label. */}
-                        <label className="inline-flex rounded-lg outline-brand focus-within:outline-2 focus-within:outline-offset-2">
-                            <input
-                                type="file"
-                                accept="application/pdf,.pdf"
-                                className="sr-only"
-                                onChange={(event) => {
-                                    const file = event.target.files?.[0];
-                                    if (file !== undefined) void openDocument(file);
-                                    event.target.value = "";
-                                }}
-                            />
-                            <span className="cursor-pointer rounded-lg bg-brand-solid px-3.5 py-2 text-sm font-semibold text-white transition duration-100 ease-linear hover:bg-brand-solid_hover">
-                                Open PDF
-                            </span>
-                        </label>
-                    </div>
+                            {/* The input is visually hidden but still focusable, so the ring is drawn on the label. */}
+                            <label className="inline-flex rounded-lg outline-brand focus-within:outline-2 focus-within:outline-offset-2">
+                                <input
+                                    type="file"
+                                    accept="application/pdf,.pdf"
+                                    className="sr-only"
+                                    onChange={(event) => {
+                                        const file = event.target.files?.[0];
+                                        if (file !== undefined) void openDocument(file);
+                                        event.target.value = "";
+                                    }}
+                                />
+                                <span className="cursor-pointer rounded-lg bg-brand-solid px-3.5 py-2 text-sm font-semibold text-white transition duration-100 ease-linear hover:bg-brand-solid_hover">
+                                    Open PDF
+                                </span>
+                            </label>
+                        </div>
+                    )}
                 </header>
 
                 <div className="px-6 pb-4">
@@ -345,11 +426,14 @@ export const PdfWorkspace = () => {
                                 errorMessage={searchError}
                                 locationErrorMessage={highlightMessage}
                                 unsearchedPages={unsearchedPages}
+                                unsupportedLayoutPages={unsupportedLayoutPages}
+                                onOpenSegment={openSegment}
+                                mode={mode}
                             />
                         </aside>
                     )}
 
-                    <section className="flex min-w-0 flex-1 flex-col">
+                    <section className="relative flex min-w-0 flex-1 flex-col">
                         {loaded === null ? (
                             <div className="flex flex-1 items-center justify-center p-8">
                                 {isLoading ? (
@@ -357,7 +441,7 @@ export const PdfWorkspace = () => {
                                 ) : (
                                     <div className="w-full max-w-120">
                                         <FileUploadDropZone
-                                            className="border-transparent bg-secondary ring-0"
+                                            className="border-transparent bg-secondary"
                                             accept="application/pdf,.pdf"
                                             allowsMultiple={false}
                                             maxSize={LIMITS.maxFileBytes}
@@ -389,10 +473,6 @@ export const PdfWorkspace = () => {
                                     </div>
                                 )}
                             </div>
-                        ) : showExtractedText ? (
-                            <div className="flex-1 overflow-y-auto">
-                                <ExtractedTextView segments={loaded.segments} />
-                            </div>
                         ) : (
                             <div className="flex min-h-0 flex-1 flex-col">
                                 <div className="flex-1 overflow-y-auto rounded-tl-2xl bg-secondary">
@@ -423,6 +503,19 @@ export const PdfWorkspace = () => {
                                         +
                                     </Button>
                                 </div>
+                            </div>
+                        )}
+
+                        {/*
+                         * Layered over the viewer rather than replacing it. Unmounting the viewer
+                         * tears down every canvas and text layer, so looking at the extraction
+                         * would re-render the whole document and drop the reader back at page 1 —
+                         * losing the position a result had just navigated to. The highlight
+                         * itself is re-applied either way; the place in the document is not.
+                         */}
+                        {loaded !== null && showExtractedText && (
+                            <div className="absolute inset-0 overflow-y-auto rounded-tl-2xl bg-primary">
+                                <ExtractedTextView segments={loaded.segments} evaluations={evaluations} />
                             </div>
                         )}
                     </section>

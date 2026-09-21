@@ -4,6 +4,7 @@
  * `fetch`, the clock, and sleeping are injected, so none of this touches a network.
  */
 import { describe, expect, it, vi } from "vitest";
+import { LIMITS } from "../src/lib/types";
 import { buildJevRequest } from "../worker/search/build-jev-request";
 import { callJevBatch, callJevBatches } from "../worker/search/call-jev";
 import type { CallJevDependencies } from "../worker/search/call-jev";
@@ -23,12 +24,10 @@ const okBody = (segmentIds: string[]) => ({
     usage: { input_tokens: 100, output_tokens: 10 },
 });
 
-const requestFor = (segmentIds: string[]) =>
-    buildJevRequest(
-        "jev-1.13.0",
-        "途中でやめたら、お金は戻る？",
-        segmentIds.map((id) => ({ id, text: "中途解約の場合、既払料金の返還は行わない。" })),
-    );
+const requestFor = (segmentIds: string[]) => {
+    const segments = segmentIds.map((id) => ({ id, text: "中途解約の場合、既払料金の返還は行わない。" }));
+    return buildJevRequest("jev-1.13.0", "途中でやめたら、お金は戻る？", { evaluate: segments, state: segments });
+};
 
 const dependencies = (fetchImpl: typeof globalThis.fetch, overrides: Partial<CallJevDependencies> = {}): CallJevDependencies => ({
     fetch: fetchImpl,
@@ -41,6 +40,28 @@ const dependencies = (fetchImpl: typeof globalThis.fetch, overrides: Partial<Cal
 });
 
 describe("callJevBatch", () => {
+    it("expects one answer per question, not one per passage in the state", () => {
+        // A batch's state is padded to a uniform size, so it carries passages no question was
+        // asked about. Counting the state instead failed every padded request as a malformed
+        // response — and no end-to-end test could see it, because they all intercept /api/search.
+        const evaluated = { id: "p001-s001", text: "中途解約の場合、既払料金の返還は行わない。" };
+        const padding = [
+            { id: "p001-s002", text: "本契約は甲乙間の合意により成立する。" },
+            { id: "p001-s003", text: "甲は乙に対し利用案内を交付する。" },
+        ];
+        const request = buildJevRequest("jev-1.13.0", "途中でやめたら、お金は戻る？", { evaluate: [evaluated], state: [evaluated, ...padding] });
+
+        expect(Object.keys(request.state.passages)).toHaveLength(3);
+        expect(Object.keys(request.questions)).toHaveLength(1);
+
+        const fetchImpl = vi.fn(async () => Response.json(okBody(["p001-s001"])));
+
+        return callJevBatch(request, dependencies(fetchImpl as never)).then((outcome) => {
+            expect(outcome.ok).toBe(true);
+            if (outcome.ok) expect([...outcome.answers.keys()]).toEqual(["p001-s001"]);
+        });
+    });
+
     it("returns one answer per requested segment", async () => {
         const fetchImpl = vi.fn(async () => Response.json(okBody(["p001-s001", "p001-s002"])));
         const outcome = await callJevBatch(requestFor(["p001-s001", "p001-s002"]), dependencies(fetchImpl as never));
@@ -88,6 +109,21 @@ describe("callJevBatch", () => {
         expect(fetchImpl).toHaveBeenCalledTimes(2);
         expect(outcome.ok).toBe(false);
         if (!outcome.ok) expect(outcome.code).toBe("provider_unavailable");
+    });
+
+    it("retries an overloaded provider", async () => {
+        // 529 is TypeSafe's "overloaded, try again". Treating it as fatal turns a momentary
+        // overload into a failed search, which is the one outcome this project must not confuse
+        // with "nothing was found".
+        const fetchImpl = vi
+            .fn()
+            .mockResolvedValueOnce(new Response("overloaded", { status: 529 }))
+            .mockResolvedValueOnce(Response.json(okBody(["p001-s001"])));
+
+        const outcome = await callJevBatch(requestFor(["p001-s001"]), dependencies(fetchImpl as never));
+
+        expect(outcome.ok).toBe(true);
+        expect(fetchImpl).toHaveBeenCalledTimes(2);
     });
 
     it("does not retry a non-retryable status", async () => {
@@ -172,9 +208,13 @@ describe("callJevBatches", () => {
             return Response.json(okBody(Object.keys(body.state.passages)));
         });
 
-        const requests = Array.from({ length: 9 }, (_, index) => requestFor([`p001-s00${index + 1}`]));
+        const requests = Array.from({ length: LIMITS.maxConcurrentRequests * 2 + 1 }, (_, index) =>
+            requestFor([`p001-s${String(index + 1).padStart(3, "0")}`]),
+        );
         await callJevBatches(requests, dependencies(fetchImpl as never));
 
-        expect(peak).toBeLessThanOrEqual(3);
+        // Both directions: the pool must hold the line, and it must actually fill — an assertion
+        // on the ceiling alone would also pass if the requests ran one at a time.
+        expect(peak).toBe(LIMITS.maxConcurrentRequests);
     });
 });

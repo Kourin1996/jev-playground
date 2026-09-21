@@ -44,7 +44,7 @@ Copied pdfjs-dist 6.3.289 runtime assets into public/pdfjs/
 npm run fixtures:sample
 ```
 
-This writes five PDFs into `tests/fixtures/`: `sample-contract-ja.pdf` (the one most tests use), `sample-blank-page-ja.pdf` (page 2 carries no text), and `sample-over-limit-ja.pdf` (nine pages, past the character cap), `sample-encrypted.pdf` (password protected), and `sample-no-text.pdf` (nothing extractable). The last four exercise spec §10 — naming excluded pages, blocking search on an over-limit document without truncating it, refusing a protected document with the reason, and explaining that OCR is not a fallback.
+This writes eight PDFs into `tests/fixtures/`. `sample-contract-ja.pdf` is the one most tests use. Five cover the limit and layout behaviour of spec §10 and §2: `sample-blank-page-ja.pdf` (page 2 carries no text), `sample-over-limit-ja.pdf` (nine pages, past the character cap), `sample-encrypted.pdf` (password protected), `sample-no-text.pdf` (nothing extractable) and `sample-two-column-ja.pdf` (side-by-side columns). Two are for measurement rather than behaviour: `eval-terms-ja.pdf` is the §11.1 evaluation subject, written so that nothing in this implementation was tuned against it, and `sample-near-limit-ja.pdf` is 10 pages and 280 segments — inside every declared limit and close enough to them to time a near-capacity search.
 
 It is **a development aid, not an acceptance fixture.** The three fictional PDFs that spec §11.1
 requires, and the 20-query evaluation set that goes with them, are still outstanding — see
@@ -72,12 +72,17 @@ npm run verify
 That is `npm run assets && npm run typecheck && npm test && npm run test:e2e`. Run them
 individually if you prefer:
 
-| Command                  | What it covers                                                                                                                                             | Expected                                     |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| `npm run typecheck`      | `tsc -b` over the app, worker, node, and test projects                                                                                                     | no output                                    |
-| `npm test`               | vitest: segmentation, normalization, highlight resolution, exact search, limits, the search client, request validation, batching, retry, ranking           | `243 passed`                                 |
-| `npm run test:e2e`       | Playwright: rendering, navigation, repeated text, zoom, concurrency, failure states, the disclosure, plus the same ground against a real-world English PDF | `29 passed`                                  |
-| `npx prettier --check .` | repository formatting                                                                                                                                      | `All matched files use Prettier code style!` |
+| Command             | What it covers                                                                                                                                                                                    | Expected     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| `npm run typecheck` | `tsc -b` over the app, worker, node, and test projects                                                                                                                                            | no output    |
+| `npm test`          | vitest: segmentation, normalization, highlight resolution, exact search, limits, the search client, request validation, batching, retry, ranking                                                  | `274 passed` |
+| `npm run test:e2e`  | Playwright: rendering, navigation, repeated text, zoom, concurrency, failure states, the disclosure, the drop zone, and the judgement view, plus the same ground against a real-world English PDF | `46 passed`  |
+
+If the end-to-end suite fails everywhere at once with `waiting for locator('input[type="file"]')`,
+check what is on port 5173 before looking at this repository: 5173 is Vite's default, and another
+project holding it means the suite is driving someone else's application. `PDF_FINDER_PORT=5291 npm
+run test:e2e` runs on a different port instead of asking you to stop the other server.
+| `npx prettier --check .` | repository formatting | `All matched files use Prettier code style!` |
 
 If `npm run test:e2e` reports **`fixture PDFs are present` failed** and everything else skipped,
 step 2 has not been run. That test exists precisely so the suite cannot report success while
@@ -90,12 +95,24 @@ npm run dev
 ```
 
 Vite serves the client and runs the Worker in the same process, so `/api/search` is same origin
-with no proxy. Open <http://localhost:5173> and open `tests/fixtures/sample-contract-ja.pdf`.
+with no proxy. Open <http://localhost:5173>.
+
+Before any document is open, the drop zone is the only control on the page — there is no **Open
+PDF** button and no **View extracted text** button yet. Check the drop zone itself first:
+
+1. Click the box's empty padding, well away from the words. The file picker must open; the whole
+   box is the control, not just the link inside it. Cancel it.
+2. Drag a PDF from the desktop and hold it over the **header**, not over the box. The box must
+   still respond — ring, lift, and the label changing to "Drop the file here".
+3. Release it there, outside the box. The browser must **not** navigate to the file. Nothing
+   should happen at all.
+
+Then open `tests/fixtures/sample-contract-ja.pdf`.
 
 The status bar should read roughly:
 
 ```
-sample-contract-ja.pdf · 3 pages · 6 searchable segments · extracted in 230 ms
+sample-contract-ja.pdf · 3 pages · 13 searchable segments · extracted in 230 ms
 ```
 
 ### 4.1 Extraction (spec §5, and the check AGENTS.md requires for extraction changes)
@@ -103,6 +120,13 @@ sample-contract-ja.pdf · 3 pages · 6 searchable segments · extracted in 230 m
 Select **View extracted text** and compare the segment order against the rendered pages. Each entry
 shows its position, segment ID, physical page, character count, and item count. Segment IDs must be
 `pNNN-sNNN`, numbered from 1 on each page, in reading order.
+
+On this document each 条 should be its own segment — 第1条 alone in `p001-s001` (with the title
+line), 第2条 alone in `p001-s002`, and so on to 第12条 in `p003-s004`. Two clauses sharing one
+segment means the boundary rules have regressed.
+
+The panel is layered **over** the viewer rather than replacing it, so hiding it again must leave the
+page you were reading, and any highlight, exactly where they were.
 
 For why the segment order looks the way it does, see [how-search-works.md](how-search-works.md).
 
@@ -131,14 +155,15 @@ With the two-result search from above still showing:
 
 ### 4.4 Failure and concurrency behaviour (spec §11.2)
 
-| Check                                           | How                                                      | Expected                                                         |
-| ----------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------- |
-| Exact mode issues no request                    | DevTools → Network, filter `search`, run an exact search | No request to `/api/search`                                      |
-| Replacing the PDF clears state                  | Open the PDF again while results are showing             | Results, highlight, and the disclosure acknowledgement all reset |
-| A page count over the limit stops the load      | Open a PDF of more than 10 pages                         | `This PDF has N pages. The limit is 10.`                         |
-| An oversized drop is reported                   | Drag a PDF larger than 10 MB onto the drop zone          | `This PDF is N MB. The limit is 10 MB.`                          |
-| A non-PDF drop is reported                      | Drag a text file onto the drop zone                      | `Only PDF files can be opened.`                                  |
-| A non-PDF chosen through the button is reported | Use **Open PDF** and pick a non-PDF                      | `This file could not be read as a PDF.`                          |
+| Check                                              | How                                                               | Expected                                                         |
+| -------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Exact mode issues no request                       | DevTools → Network, filter `search`, run an exact search          | No request to `/api/search`                                      |
+| Replacing the PDF clears state                     | Open the PDF again while results are showing                      | Results, highlight, and the disclosure acknowledgement all reset |
+| A page count over the limit stops the load         | Open a PDF of more than 10 pages                                  | `This PDF has N pages. The limit is 10.`                         |
+| An oversized drop is reported                      | Drag a PDF larger than 10 MB onto the drop zone                   | `This PDF is N MB. The limit is 10 MB.`                          |
+| A non-PDF drop is reported                         | Drag a text file onto the drop zone                               | `Only PDF files can be opened.`                                  |
+| A non-PDF chosen through the button is reported    | With a document already open, use **Open PDF** and pick a non-PDF | `This file could not be read as a PDF.`                          |
+| A layout the PoC does not claim to handle is named | Open `tests/fixtures/sample-two-column-ja.pdf`                    | The status bar names `side-by-side text on page 1`               |
 
 Nothing is ever silently truncated: the limit that was reached is always named (spec §10).
 
@@ -172,23 +197,66 @@ cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
-Choose **Meaning**, enter `途中でやめたら、お金は戻る？`, and accept the disclosure that appears
-before the first meaning search of each document. The no-refund clause should come back as a
-result even though the query and the document share no keywords.
+The disclosure of what leaves the browser sits beside the mode selector and is always visible —
+there is no dialog to dismiss (spec §14.13). Check it is on screen before choosing **Meaning**.
+
+Enter `途中でやめたら、お金は戻る？`. The no-refund clause should come back as the first result
+even though the query and the document share no keywords, and the viewer should open it
+automatically. The result must be **第4条 alone**: if it arrives bundled with 第3条 and 第5条, the
+250-character floor has come back (spec §14.1).
+
+The status bar should show a search in the low hundreds of milliseconds. This document produces 4
+requests of 4 passages each — every request in a search carries the same number, because the size
+of the state moves the score (spec §14.19).
+
+Then select **View extracted text** again. Every segment now carries what Jev judged it to be — a
+percentage, a bar with both thresholds marked on it, the score and the confidence — including the
+segments no result names. 第4条 should read near 100% and `matched`; the unrelated clauses should
+read `below threshold` with the track still visible at 0%, so an empty bar reads as a zero rather
+than as missing data.
 
 `.dev.vars` is gitignored. Never commit a real key. Use only fictional or explicitly approved
 documents, as spec §10 requires.
 
 Without a key the Worker returns `internal_error`, which is correct behaviour, not a bug.
 
-## 6. What this runbook cannot verify
+## 6. Quality, and what this runbook still cannot verify
 
-Both of these are outstanding and neither has a local substitute.
+`npm run eval` runs the §11.1 evaluation set: 32 queries over two documents.
+`eval-terms-ja.pdf` is a fictional Japanese terms-of-service document that nothing in this
+implementation was tuned against; `bitcoin.pdf` carries eighteen queries written by an outside
+reviewer against the paper's own sections. It needs a credential and it sends both documents' text
+to TypeSafe AI, which is why it is not part of `npm test`.
 
-| Not verifiable                                                              | Blocked on                                                                                                                                |
-| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| The browser → Worker → TypeSafe AI path against the live provider           | A `TYPESAFE_API_KEY`. The E2E suite intercepts `/api/search`, which exercises the client half only — mock-only success is not integration |
-| Search quality (spec §11.1) and the five-second latency target (spec §11.3) | The three acceptance fixtures and the authored 20-query set. `npm run eval` refuses to run and names the missing files                    |
+```bash
+npm run eval
+```
+
+It prints three rates separately, because the two directions of error cost different things:
+
+```text
+miss            0/26    the answer is in the searchable text, the search returned nothing
+top-3 hit       26/26   the intended passage is among the results shown
+false positive  0/6     no answer exists, the search reported a match
+```
+
+One run of 32 queries. They do **not** calibrate §7's thresholds — that needs enough queries
+falling near 0.35 and 0.65 to show where they belong. Their value is that half of them came from
+outside the project, and those found a defect four rounds of in-house tests had missed: two pages
+whose figures outnumber their prose were being split line by line, so every answer arrived cut
+mid-sentence.
+
+Timing near the limits is covered by `sample-near-limit-ja.pdf`: 280 segments, 70 requests, and
+about 2.0–2.5 s against a 15-second deadline over three runs.
+
+These remain outstanding, and none has a local substitute.
+
+| Not verifiable                                      | Blocked on                                                                                                                |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Whether §7's thresholds are in the right place      | A set with enough queries whose answers sit near 0.35 and 0.65, and a document written by someone other than this project |
+| Behaviour at the 500-segment cap itself             | No fixture reaches it; `sample-near-limit-ja.pdf` stops at 280                                                            |
+| What a rate-limited retry costs inside the deadline | It has never been observed; the retry path is covered only by unit tests with an injected clock                           |
+| Whether a PDF's own text can steer a judgement      | Not attempted. `docs/spec.md` §14.19 measures ordinary passages sharing a state, which is a different problem             |
 
 ## Troubleshooting
 

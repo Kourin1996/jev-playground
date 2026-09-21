@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { OutputScale, TextLayer } from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from "pdfjs-dist/types/src/display/api";
 import type { PageExtraction } from "@/lib/pdf/extract-text";
-import type { HighlightTargetFailure } from "@/lib/pdf/highlight";
+import type { AppliedHighlight, HighlightTargetFailure } from "@/lib/pdf/highlight";
 import { applyHighlight, clearHighlight, resolveHighlightTargets } from "@/lib/pdf/highlight";
 import type { SearchHit } from "@/lib/types";
 import { cx } from "@/utils/cx";
@@ -104,7 +104,7 @@ const applyPageVariables = (container: HTMLElement, scale: number, userUnit: num
 export const PdfViewer = ({ document, pages, scale, highlightedHit, onHighlightFailure }: PdfViewerProps) => {
     const rootRef = useRef<HTMLDivElement>(null);
     const recordsRef = useRef<Map<number, PageRecord>>(new Map());
-    const highlightedElementsRef = useRef<HTMLElement[]>([]);
+    const highlightedElementsRef = useRef<AppliedHighlight[]>([]);
     /** The passage the viewer last scrolled to, so a later page finishing does not yank it back. */
     const scrolledToRef = useRef<string | null>(null);
     const [renderGeneration, setRenderGeneration] = useState(0);
@@ -278,7 +278,7 @@ export const PdfViewer = ({ document, pages, scale, highlightedHit, onHighlightF
             return;
         }
 
-        const resolved = resolveHighlightTargets(record.textLayer, extraction.textContent, highlightedHit.itemIndexes, record.isRendered);
+        const resolved = resolveHighlightTargets(record.textLayer, extraction.textContent, highlightedHit.ranges, record.isRendered);
 
         if (!resolved.ok) {
             // The result is kept; only the display of its location failed (spec §8).
@@ -286,7 +286,7 @@ export const PdfViewer = ({ document, pages, scale, highlightedHit, onHighlightF
             return;
         }
 
-        highlightedElementsRef.current = applyHighlight(resolved.elements);
+        highlightedElementsRef.current = applyHighlight(resolved.targets);
         onHighlightFailure(null);
 
         if (scrolledToRef.current !== highlightedHit.key) {

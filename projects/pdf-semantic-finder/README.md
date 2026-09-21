@@ -9,11 +9,33 @@ The app will let a reader open one text-based PDF, search in their own words, re
 The proof of concept is implemented. Opening a PDF, extraction, segmentation, exact search,
 highlighting, and the application API are working and verified in a real browser.
 
-**Not yet verified:** the browser to Worker to TypeSafe AI path has never been exercised against
-the live provider, because no `TYPESAFE_API_KEY` has been available. The Worker is covered by unit
-tests and the client by end-to-end tests against an intercepted endpoint. The search-quality target
-in `docs/spec.md` §11.1 and the latency target in §11.3 are **unmeasured**, and the fixture PDFs
-they need are not in the repository (see `tests/fixtures/README.md`).
+**Verified against the live provider.** A real browser-to-Worker-to-TypeSafe search returns the
+intended passage on both sample documents: 86 units and 22 requests in 1,055 ms on
+`assets/bitcoin.pdf`, and 13 units in 269 ms on the generated Japanese contract, where the top
+result is the single 中途解約 clause that answers the §13 demonstration query.
+
+**Measured, and acted on.** What moves an uncertain passage's score is what sits in one request's
+`state`, not the number of questions asked over it. Every request in a search now carries the same
+number of passages, and that number is four. That is a mitigation of one variable, not a cure:
+holding the count at four and changing only the neighbours' length, their distance, or the target's
+position still moved the verdict in 10 of 30 conditions. See `docs/spec.md` §14.19 for every
+condition and number.
+
+**Search quality, measured.** `npm run eval`, 32 queries over two documents, one run: 0 misses out
+of 26 answerable queries, 26 of 26 with the intended passage in the top three, 0 false positives
+out of 6. One document is a fictional Japanese fixture written so that nothing was tuned against
+it; the other is the Bitcoin whitepaper with eighteen queries written by an outside reviewer. Those
+outside queries found a segmentation defect on their first run — two pages whose figures outnumber
+their prose were split line by line, so every answer arrived cut mid-sentence. Enough to say the
+mechanism reaches the intended passage; not enough to calibrate the thresholds in `docs/spec.md`
+§7, which remain hypotheses.
+
+**Timing near the limits.** 280 segments and 70 requests completed in 2.0–2.5 s against a
+15-second deadline, over three runs.
+
+**Not yet verified:** whether §7's thresholds sit in the right place, behaviour at the 500-segment
+cap itself, what a rate-limited retry costs inside the deadline, and whether a PDF's own text can
+steer a judgement.
 
 Places where the implementation had to settle a question the specification left open or
 self-inconsistent are recorded in [docs/spec.md §14](docs/spec.md). The canonical requirements
@@ -53,7 +75,7 @@ npm run typecheck    # tsc -b across app, worker, node, and test projects
 npm test             # vitest: segmentation, highlighting, search client, validation, ranking
 npm run test:e2e     # Playwright: viewer, highlighting, zoom, concurrency
 npx prettier --write .   # the repo's formatting config is authoritative
-npm run fixtures:sample  # generate a Japanese sample PDF for local verification
+npm run fixtures:sample  # generate the Japanese and limit-case sample PDFs
 npm run verify       # assets + typecheck + unit tests + E2E, in one go
 npm run eval         # the fixed evaluation set; needs fixture PDFs and a credential
 npm run deploy       # build, then wrangler deploy
@@ -112,8 +134,11 @@ walkthrough of segmentation and the Jev request for readers new to the project.
 | Persistence                                       | None; nothing is stored               |
 
 Highlighting resolves a result to its physical page and original PDF.js text-item indexes, then to
-the elements PDF.js created from the same `TextContent`. A passage is never located by searching the
-rendered text for a matching string, which would resolve repeated text to the wrong occurrence.
+the elements PDF.js created from the same `TextContent`. Both kinds of result carry character
+offsets within those items: two exact matches inside one text item highlight different words, and a
+meaning result covers its own passage even when one oversized item spans several segments. A
+passage is never located by searching the rendered text for a matching string, which would resolve
+repeated text to the wrong occurrence.
 
 Exact search does not use segments: each page is indexed as one continuous string so a phrase
 straddling two segments is still found. Segments are the unit meaning search evaluates.

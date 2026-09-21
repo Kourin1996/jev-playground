@@ -1,0 +1,93 @@
+<!doctype html>
+<!--
+  Source for the evaluation fixture PDF (scripts/make-sample-pdf.mjs).
+
+  Entirely fictional: an invented photo-storage service, no real company, product or contract.
+
+  This document exists to be a subject the implementation was NOT tuned against. Nothing here was
+  used to choose the segmentation boundaries, the fragment rules, the batch size or the §7
+  thresholds — those were all settled on `sample-contract.html` and on assets/bitcoin.pdf. Measuring
+  quality on the documents a heuristic was fitted to reports the fit, not the quality.
+
+  Properties the evaluation cases depend on:
+    1. Answers that a reader would ask for in everyday words the document never uses — 解約, 返金,
+       パスワード and 値上げ appear nowhere, while the clauses that answer those questions do.
+    2. A denial: deleted photographs are not recoverable, stated as an obligation on the user.
+    3. A condition split across a clause boundary, so the answer needs the neighbour: 第9条 gives a
+       deadline, and 第10条 grants the refund only 前条の期間内 — neither clause answers alone.
+    4. Short provisions with no sentence-ending punctuation (第14条, 第15条), which is the shape
+       three successive fragment rules merged away.
+    5. Topics the no-answer queries ask about — printing, physical media, telephone support — are
+       genuinely absent, so a result for them is a false positive rather than a miss on our part.
+-->
+<html lang="ja">
+    <head>
+        <meta charset="utf-8" />
+        <title>フォトストレージ利用規約（架空）</title>
+    </head>
+    <body>
+        <p>フォトストレージ利用規約（架空）</p>
+
+        <p>
+            第1条（適用範囲）本規約は、当社が提供する写真保管サービス（以下「本サービス」という。）の利用について、当社と利用者との間の一切の関係に適用される。当社が別途掲示する個別の案内がある場合、当該案内は本規約の一部を構成する。
+        </p>
+
+        <p>
+            第2条（アカウントの開設）利用者は、当社所定の手続によりアカウントを開設するものとする。アカウントは利用者本人のみが使用することができ、家族その他の第三者に使用させてはならない。当社は、開設の申請内容に不備があると認めるときは、開設を拒むことができる。
+        </p>
+
+        <p>
+            第3条（認証情報の管理）利用者は、アカウントの認証に用いる文字列を自己の責任において管理し、これを他人に開示してはならない。当該文字列を失念した場合、利用者は当社所定の再設定手続を行うものとし、当社が当該文字列を利用者に通知することはない。
+        </p>
+
+        <p>
+            第4条（保存容量）標準プランにおいて利用者が保存できる写真の総量は、圧縮前の状態で200ギガバイトまでとする。これを超える保存を希望する利用者は、拡張プランへの変更を申し込むことができる。
+        </p>
+
+        <p class="pb">
+            第5条（写真の削除）利用者は、本サービス上の写真をいつでも削除することができる。削除された写真は当社の設備から消去され、当社はこれを復元する手段を有しない。利用者は、重要な写真について自ら別途の複製を保持するものとする。
+        </p>
+
+        <p>
+            第6条（アカウントの停止）利用者が本規約に違反したと当社が判断したときは、当社は事前の通知を要することなくアカウントの利用を停止することができる。この場合、当社は停止の理由を利用者に説明する義務を負わない。
+        </p>
+
+        <p>
+            第7条（利用料金の改定）当社は、経済情勢の変動その他の合理的な事由があるときは、本サービスの対価の額を変更することができる。変更を行う場合、当社は適用開始日の60日前までに、アカウントに登録された連絡先に宛ててその旨を通知する。
+        </p>
+
+        <p>
+            第8条（支払の方法）利用者は、当社の定める決済手段により、毎月の対価を前月末日までに支払うものとする。支払が確認できない場合、当社は本サービスの提供を一時的に停止することができる。
+        </p>
+
+        <p>
+            第9条（利用の終了）利用者が本サービスの利用を終了しようとするときは、終了を希望する日の14日前までに、当社所定の画面から手続を行うものとする。手続を行わない限り、対価の請求は継続する。
+        </p>
+
+        <p class="pb">
+            第10条（対価の取扱い）前条の期間内に手続が行われた場合に限り、当社は未経過期間に対応する対価を利用者に返還する。当該期間を経過した後に手続が行われたときは、当社は既に受領した対価を返還しない。
+        </p>
+
+        <p>
+            第11条（保管期間）アカウントの利用が終了した後、当社は写真を30日間に限り保管し、その後これを消去する。利用者は、当該期間内に限り、写真の取得を求めることができる。
+        </p>
+
+        <p>
+            第12条（第三者への提供）当社は、法令に基づく場合を除き、利用者の写真を第三者に提供しない。統計的な処理を行った情報であって個人を識別することができないものは、この限りでない。
+        </p>
+
+        <p>
+            第13条（当社の責任）当社は、本サービスの提供に関して利用者に生じた損害について、当社に故意または重大な過失がある場合を除き、責任を負わない。当社が責任を負う場合であっても、その範囲は直近12か月に利用者が支払った対価の総額を上限とする。
+        </p>
+
+        <p>第14条（譲渡禁止）本サービスを利用する権利の譲渡、貸与および担保設定を禁止する</p>
+
+        <p>第15条（準拠法）本規約の準拠法は日本法とする</p>
+
+        <p>
+            第16条（規約の変更）当社は、本規約を変更することがある。変更後の規約は、当社が定める方法により掲示した時点から効力を生じ、以後の利用には変更後の規約が適用される。
+        </p>
+
+        <p>この文書は架空のものであり、実在する企業、製品、契約とは一切関係がありません。評価用の資料としてのみ作成されています。</p>
+    </body>
+</html>

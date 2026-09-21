@@ -198,62 +198,93 @@ describe("buildInstructions", () => {
         const instructions = buildInstructions("p003-s004", true);
 
         expect(instructions).toContain("contextBefore");
-        // Spec §6.3: context may disambiguate, never supply the answer.
-        expect(instructions).toContain("resolve what the target passage refers to");
-        expect(instructions).toContain("cannot make the target relevant");
+
+        // Spec §6.3. The permission and the prohibition are separate sentences, and the boundary
+        // between them is the point: a conditional clause whose limit lives in the clause before
+        // it must still be able to answer, while a passage that merely sits next to an answer
+        // must not. The earlier wording forbade both and made the first kind unreachable.
+        expect(instructions).toContain("understand what the target passage means and the conditions under which it applies");
+        expect(instructions).toContain("appears only in a neighbour and the target itself has nothing to do with it");
+        expect(instructions).not.toContain("cannot make the target relevant when the requested information is absent");
     });
 });
 
 describe("packBatches", () => {
-    it("never exceeds the per-batch segment count", () => {
+    it("gives every request a state of the same size", () => {
+        // The point of the packing. With sizes of 4, 4, 4, 1 the passage that happened to land
+        // last would be scored against a state a quarter the size of everyone else's, and a
+        // smaller state measurably raises the score — so it would rank high for its position.
         const segments = Array.from({ length: 25 }, (_, index) => segment(index + 1, "短い本文。"));
-
-        for (const batch of packBatches(segments)) {
-            expect(batch.length).toBeLessThanOrEqual(LIMITS.maxSegmentsPerBatch);
-        }
-    });
-
-    it("counts context against the batch budget, because context is sent", () => {
-        // Billing the target alone would silently overrun the provider's per-request budget.
-        const withContext = Array.from({ length: 8 }, (_, index) => ({
-            ...segment(index + 1, "あ".repeat(400)),
-            contextBefore: "い".repeat(400),
-            contextAfter: "う".repeat(400),
-        }));
-        const batches = packBatches(withContext);
-
-        for (const batch of batches) {
-            if (batch.length === 1) continue;
-            const billed = batch.reduce((total, entry) => total + billedCharacters(entry), 0);
-            expect(billed).toBeLessThanOrEqual(LIMITS.maxCharactersPerBatch);
-        }
-        expect(batches.length).toBeGreaterThan(1);
-    });
-
-    it("packs by characters first, because eight maximum-length segments exceed the batch limit", () => {
-        // 8 x 800 = 6400 > 6000, so the two documented limits are not simultaneously satisfiable.
-        const segments = Array.from({ length: 8 }, (_, index) => segment(index + 1, "あ".repeat(LIMITS.maxSegmentCharacters)));
         const batches = packBatches(segments);
 
-        for (const batch of batches) {
-            const characters = batch.reduce((total, entry) => total + [...entry.text].length, 0);
-            if (batch.length > 1) expect(characters).toBeLessThanOrEqual(LIMITS.maxCharactersPerBatch);
-        }
-
         expect(batches.length).toBeGreaterThan(1);
+        const sizes = new Set(batches.map((batch) => batch.state.length));
+        expect(sizes).toEqual(new Set([LIMITS.maxSegmentsPerBatch]));
     });
 
-    it("loses no segment", () => {
+    it("asks about every segment exactly once, however the states are filled", () => {
         const segments = Array.from({ length: 37 }, (_, index) => segment(index + 1, "あ".repeat(300)));
-        const packed = packBatches(segments).flat();
+        const asked = packBatches(segments).flatMap((batch) => batch.evaluate);
 
-        expect(packed.map((entry) => entry.id)).toEqual(segments.map((entry) => entry.id));
+        // Order is preserved, because ranking recovers document order from it (spec §14.2).
+        expect(asked.map((entry) => entry.id)).toEqual(segments.map((entry) => entry.id));
+        // Padding never turns into an extra question, so no duplicate answer comes back.
+        expect(new Set(asked.map((entry) => entry.id)).size).toBe(segments.length);
+    });
+
+    it("fills a short final state from the document rather than leaving it small", () => {
+        const segments = Array.from({ length: 5 }, (_, index) => segment(index + 1, "短い本文。"));
+        const batches = packBatches(segments);
+
+        expect(batches).toHaveLength(2);
+        expect(batches[1].evaluate.map((entry) => entry.id)).toEqual(["p001-s005"]);
+        expect(batches[1].state).toHaveLength(LIMITS.maxSegmentsPerBatch);
+        // The filler is real content from this document, never invented or repeated within a state.
+        expect(new Set(batches[1].state.map((entry) => entry.id)).size).toBe(LIMITS.maxSegmentsPerBatch);
+        for (const entry of batches[1].state) expect(segments).toContain(entry);
+    });
+
+    it("sends a document smaller than one batch as a single request", () => {
+        const segments = Array.from({ length: 2 }, (_, index) => segment(index + 1, "短い本文。"));
+        const batches = packBatches(segments);
+
+        // Nothing to pad from, and nothing to be unfair about: every passage sees the same state.
+        expect(batches).toHaveLength(1);
+        expect(batches[0].state).toHaveLength(2);
+        expect(batches[0].evaluate).toHaveLength(2);
+    });
+
+    it("keeps the character budget above what a full batch can carry", () => {
+        // The count is what binds now. If characters could force a smaller batch, the states would
+        // stop being uniform and the whole reason for the packing would be gone.
+        const segments = Array.from({ length: LIMITS.maxSegmentsPerBatch * 2 }, (_, index) => ({
+            ...segment(index + 1, "あ".repeat(LIMITS.maxSegmentCharacters)),
+            contextBefore: "い".repeat(LIMITS.maxSegmentCharacters),
+            contextAfter: "う".repeat(LIMITS.maxSegmentCharacters),
+        }));
+
+        for (const batch of packBatches(segments)) {
+            const billed = batch.state.reduce((total, entry) => total + billedCharacters(entry), 0);
+            expect(billed).toBeLessThanOrEqual(LIMITS.maxCharactersPerBatch);
+            expect(batch.state).toHaveLength(LIMITS.maxSegmentsPerBatch);
+        }
+        expect(LIMITS.maxCharactersPerBatch).toBeGreaterThanOrEqual(LIMITS.maxSegmentsPerBatch * LIMITS.maxSegmentCharacters * 3);
     });
 });
 
 describe("buildJevRequest", () => {
+    it("asks about the evaluated passages only, while the state carries all of them", () => {
+        // A padded state must not turn into extra questions: an answer nobody asked for would
+        // either be discarded or, worse, counted twice in the ranking.
+        const body = buildJevRequest("jev-1.13.0", "q", { evaluate: [segment(1)], state: [segment(1), segment(2), segment(3)] });
+
+        expect(Object.keys(body.questions)).toEqual(["relevance_p001_s001"]);
+        expect(Object.keys(body.state.passages)).toEqual(["p001-s001", "p001-s002", "p001-s003"]);
+    });
+
     it("creates one score question per segment with the spec's criteria", () => {
-        const body = buildJevRequest("jev-1.13.0", "途中でやめたら、お金は戻る？", [segment(1), segment(2)]);
+        const batch = { evaluate: [segment(1), segment(2)], state: [segment(1), segment(2)] };
+        const body = buildJevRequest("jev-1.13.0", "途中でやめたら、お金は戻る？", batch);
 
         expect(Object.keys(body.questions)).toEqual(["relevance_p001_s001", "relevance_p001_s002"]);
         expect(body.questions.relevance_p001_s001.criteria).toEqual(RELEVANCE_CRITERIA);
@@ -261,7 +292,8 @@ describe("buildJevRequest", () => {
     });
 
     it("sends the neighbouring passages alongside the target", () => {
-        const body = buildJevRequest("jev-1.13.0", "q", [{ ...segment(1), contextBefore: "前の条項", contextAfter: "後の条項" }]);
+        const withContext = { ...segment(1), contextBefore: "前の条項", contextAfter: "後の条項" };
+        const body = buildJevRequest("jev-1.13.0", "q", { evaluate: [withContext], state: [withContext] });
 
         expect(body.state.passages["p001-s001"]).toEqual({
             text: segment(1).text,
@@ -271,7 +303,8 @@ describe("buildJevRequest", () => {
     });
 
     it("refuses a malformed id even if validation was skipped", () => {
-        expect(() => buildJevRequest("jev-1.13.0", "q", [{ id: "nope", text: "本文" }])).toThrow();
+        const bad = { id: "nope", text: "本文" };
+        expect(() => buildJevRequest("jev-1.13.0", "q", { evaluate: [bad], state: [bad] })).toThrow();
     });
 });
 
