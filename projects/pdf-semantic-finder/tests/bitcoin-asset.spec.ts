@@ -62,7 +62,7 @@ test.describe("assets/bitcoin.pdf", () => {
         await open(page);
 
         await expect(page.locator("footer p")).toContainText(`${SEGMENT_COUNT} searchable segments`);
-        await expect(page.locator("header p")).toContainText("9 pages");
+        await expect(page.locator("header p.truncate")).toContainText("9 pages");
 
         await page.getByRole("button", { name: "View extracted text" }).click();
         const texts = await page.locator("article > p").evaluateAll((nodes) => nodes.map((node) => node.textContent ?? ""));

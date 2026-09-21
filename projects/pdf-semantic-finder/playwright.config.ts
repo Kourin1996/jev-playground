@@ -3,11 +3,10 @@ import { defineConfig } from "@playwright/test";
 /**
  * The port the suite drives.
  *
- * Overridable because 5173 is Vite's default and another project on the same machine will take it,
- * at which point every test here drives someone else's application and fails for reasons that have
- * nothing to do with this repository.
+ * Overridable because another project on the same machine may already use the default port. Keep
+ * this project's default distinct, and never reuse an unrelated server as the test target.
  */
-const PORT = process.env.PDF_FINDER_PORT ?? "5173";
+const PORT = process.env.PDF_FINDER_PORT ?? "5196";
 const BASE_URL = `http://localhost:${PORT}`;
 
 /**
@@ -18,7 +17,7 @@ const BASE_URL = `http://localhost:${PORT}`;
  * runs against `wrangler dev` on the build, which is the only place the deployed behaviour exists
  * before it is deployed.
  */
-const PREVIEW_PORT = process.env.PDF_FINDER_PREVIEW_PORT ?? "8787";
+const PREVIEW_PORT = process.env.PDF_FINDER_PREVIEW_PORT ?? "8876";
 const PREVIEW_URL = `http://localhost:${PREVIEW_PORT}`;
 
 export default defineConfig({
@@ -51,13 +50,13 @@ export default defineConfig({
         {
             command: `npm run dev -- --port ${PORT} --strictPort`,
             url: BASE_URL,
-            reuseExistingServer: true,
+            reuseExistingServer: false,
             timeout: 120_000,
         },
         {
             command: `npm run build && npx wrangler dev --port ${PREVIEW_PORT} --inspector-port 0`,
             url: PREVIEW_URL,
-            reuseExistingServer: true,
+            reuseExistingServer: false,
             timeout: 180_000,
         },
     ],

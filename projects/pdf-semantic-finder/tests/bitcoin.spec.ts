@@ -113,7 +113,7 @@ test.describe("real-world English document", () => {
         await open(page);
 
         // Which document is open is stated in the header; what the machine made of it, in the footer.
-        expect(await page.locator("header p").textContent()).toContain(`${PAGE_COUNT} pages`);
+        expect(await page.locator("header p.truncate").textContent()).toContain(`${PAGE_COUNT} pages`);
         expect(await page.locator("footer p").textContent()).toMatch(/\d+ searchable segments/u);
 
         // Inside the limits, so search is offered rather than blocked.

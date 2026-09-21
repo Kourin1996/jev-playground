@@ -47,7 +47,7 @@ test.describe("declared limits", () => {
 
         await expect(page.locator("footer p")).toContainText("no text on page 2");
         // The document's identity lives in the header now; the footer carries only the timings.
-        await expect(page.locator("header p")).toContainText("3 pages");
+        await expect(page.locator("header p.truncate")).toContainText("3 pages");
 
         // The pages that do have text remain searchable.
         await page.getByRole("radio", { name: "Exact text" }).click();
