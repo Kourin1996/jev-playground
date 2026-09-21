@@ -1,12 +1,14 @@
 # Jev Playground
 
-Jev（TypeSafe AI）を使った実験・サンプルプロジェクトをまとめたリポジトリです。
+Experiments and sample projects built with Jev (TypeSafe AI).
 
-## プロジェクト
+## Projects
 
-- [PDF Semantic Finder](projects/pdf-semantic-finder/README.md): PDF内の文章を自然言語で検索し、該当箇所をハイライトするWebアプリ。React・TypeScript・PDF.js・Cloudflare Workersを使用しています。
+- [PDF Semantic Finder](projects/pdf-semantic-finder/README.md) — a web application that searches
+  the text inside a PDF by meaning rather than by string, and highlights the passage it found in the
+  original document. React, TypeScript, PDF.js and Cloudflare Workers.
 
-## ローカルで起動
+## Running one locally
 
 ```bash
 cd projects/pdf-semantic-finder
@@ -14,12 +16,14 @@ npm install
 cp .dev.vars.example .dev.vars
 ```
 
-意味検索を利用するには、`.dev.vars`に`TYPESAFE_API_KEY`を設定します。
+Meaning search needs a credential: set `TYPESAFE_API_KEY` in `.dev.vars`. Exact text search works
+without one, because it never leaves the browser.
 
 ```bash
 npm run dev
 ```
 
-起動後、http://localhost:5173 を開きます。
+Then open http://localhost:5173.
 
-ビルド・テスト・デプロイの詳細は、[プロジェクトのREADME](projects/pdf-semantic-finder/README.md)を参照してください。
+See the [project's README](projects/pdf-semantic-finder/README.md) for building, testing and
+deploying.

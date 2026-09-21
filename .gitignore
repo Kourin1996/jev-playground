@@ -1,0 +1,9 @@
+# wrangler's local cache and state. It is written wherever wrangler is run, so it appears here as
+# well as inside a project, and it holds account identifiers that have no business in a public
+# repository.
+.wrangler/
+
+# Worker secrets, wherever a project keeps them.
+.dev.vars
+
+.DS_Store
