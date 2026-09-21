@@ -1425,3 +1425,48 @@ roughly 12% of the top-3 hit rate. The batch size stays at 4. If it is ever revi
 must bound a request by _estimated tokens_ rather than by passage count — a count that is safe for
 English prose exceeds the ceiling on dense Japanese, and the failure is an `HTTP 400` for the whole
 search.
+
+### 14.29 Where a search's tokens actually go, and what reducing calls is worth
+
+Following §14.28. If a search cannot be one request, can the call count be cut — and does cutting it
+save anything?
+
+**It saves nothing, and the decomposition says why.** A real 86-passage search on
+`assets/bitcoin.pdf`, 22 requests, by payload:
+
+| Component                |  Bytes |    Share | Scales with                |
+| ------------------------ | -----: | -------: | -------------------------- |
+| Question instructions    | 78,948 |    47.0% | questions, one per segment |
+| Question criteria        | 17,888 |    10.6% | questions, one per segment |
+| Neighbour context copies | 36,815 |    21.9% | passages in state          |
+| Passage text             | 21,506 |    12.8% | passages in state          |
+| Query                    |  1,188 | **0.7%** | **requests**               |
+
+Only that last row scales with the number of requests. Fewer, larger calls move the same bytes;
+§14.27 measured the same thing from the other end. Call count is a **latency and rate-limit** lever,
+not a billing one.
+
+**And at this scale the billing is not the thing to optimise.** That whole search — 45,462 input
+tokens at $42 per billion — cost **$0.0019**. A search at the 2,000-segment cap costs about $0.05.
+
+**Two token levers were measured anyway, because they are real.** Both on the same search, against
+the live provider:
+
+| Variant                                  | Input tokens |    Saving |
+| ---------------------------------------- | -----------: | --------: |
+| Current                                  |       45,462 |         — |
+| Shorter instructions, same rules         |       41,420 |      8.9% |
+| In-batch context named instead of copied |       40,775 |     10.3% |
+| Both                                     |   **34,304** | **24.5%** |
+
+The second works because a batch of four consecutive segments already contains most of its own
+neighbours: `s2`'s `contextBefore` _is_ `s1.text`, sitting in the same request. Naming it instead of
+copying it removes the duplicate without removing the information.
+
+The top result was identical in every variant, and each shifted exactly one passage of 86 across a
+§7 band — upward both times, and into the band §14.27 no longer offers.
+
+**Neither is adopted.** Both change the prompt, and a prompt change is a ranking change: §11.1's
+held-out set is the gate, and it has not been run on them. They are recorded as measured options,
+with the size of the prize attached, so the decision is about 24.5% of $0.0019 rather than about a
+guess.
