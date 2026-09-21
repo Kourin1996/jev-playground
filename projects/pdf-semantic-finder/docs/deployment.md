@@ -106,6 +106,15 @@ npm run deploy     # npm run build && wrangler deploy
 The first deploy also creates the Durable Object class through the `v1` migration and asks
 Cloudflare to provision the custom domain. DNS and the certificate can take a few minutes.
 
+**Deploying over a Worker that was created in the dashboard.** The `pdf-finder` Worker on this
+account was created there, from the "Hello world" template, and `pdf-finder.kourin.jp` was attached
+to it — so the hostname, its DNS record and its certificate already exist and already answer 200.
+`wrangler deploy` replaces that Worker's code rather than creating a second one, because
+`wrangler.jsonc` declares the same `name`. Expect wrangler to ask for confirmation before
+overwriting something last edited in the dashboard; a prompt is not answerable in a CI run, which is
+one more reason the first deploy is manual. Once wrangler has deployed once, later deploys are not
+overwriting dashboard edits and the question does not arise.
+
 **Do the first one by hand, from a logged-in machine.** It provisions a hostname, runs a Durable
 Object migration and needs the secrets to be in place already — none of which a CI token should be
 doing the first time, when there is no known-good deployment to compare against. Once it has

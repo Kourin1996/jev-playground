@@ -104,6 +104,15 @@ npm run deploy     # npm run build && wrangler deploy
 初回デプロイでは `v1` マイグレーションによる Durable Object クラスの作成と、カスタムドメインの
 プロビジョニングも行われます。DNSと証明書には数分かかることがあります。
 
+**dashboard で作成した Worker に上書きデプロイする場合。** このアカウントの `pdf-finder` Worker は
+dashboard の "Hello world" テンプレートから作成されており、`pdf-finder.kourin.jp` が既に割り当て
+られています。つまりホスト名・DNSレコード・証明書は既に存在し、200 を返します。`wrangler.jsonc` が
+同じ `name` を宣言しているので、`wrangler deploy` は2つ目を作るのではなくこの Worker のコードを
+置き換えます。dashboard で最後に編集されたものを上書きする前に wrangler が確認を求めることが
+あります。CI の実行では prompt に answer できません。初回を手作業にする理由がもう1つここにあります。
+一度 wrangler でデプロイしてしまえば、以降は dashboard の編集を上書きすることにならないので
+この確認は発生しません。
+
 **初回は手元のログイン済み環境から手作業で実行してください。** ホスト名のプロビジョニング、
 Durable Object のマイグレーション、そして secret が先に入っていることが前提になる操作であり、
 比較できる既知の正常なデプロイがまだ無い段階で CI のトークンにやらせるべきものではありません。
