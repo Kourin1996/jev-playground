@@ -233,13 +233,23 @@ Deploying was never in question either way: the licence permits "Creating websit
 applications, and apps for yourself, your company, or for a client", and the production build emits
 no source maps and no `sourceMappingURL`, so the deployed site exposes compiled output only.
 
-### Agent working material is no longer in the repository
+### Agent working material is published with its notices
 
-`.agents/`, `.claude/`, `skills-lock.json` and `UNTITLED.md` were tracked and are not any more. They
-are tooling rather than product: five agent skills copied from `anthropics/skills`,
-`vercel-labs/agent-skills` and `cloudflare/skills` under MIT and Apache-2.0, and Untitled UI's own
-`AGENTS.md`. Redistributing the skills would mean carrying notices for material that has nothing to
-do with what this application does, so they stay on disk and out of the repository instead.
+`.agents/` holds five skills copied from `anthropics/skills`, `vercel-labs/agent-skills` and
+`cloudflare/skills`, with `.claude/skills/` symlinked to them and `skills-lock.json` recording the
+source and content hash of each. They are development guidance, not part of the application.
+
+Publishing them means redistributing them, so the notices travel with them: the two Apache-2.0
+skills now carry their upstream `LICENSE` in their own directory, and the three MIT ones are
+recorded in `THIRD-PARTY-NOTICES.md` — that repository grants MIT in its README and ships no licence
+file or copyright line, so there is nothing to copy and nothing has been invented. `.prettierignore`
+excludes `.agents/` so formatting this repository cannot silently modify them.
+
+Scanned before publishing, like the rest: no emails, no home paths, no tokens, no keys in any of the
+95 files.
+
+`UNTITLED.md` stays out. Unlike the components it is documentation rather than MIT-licensed source,
+and it is kept locally rather than redistributed.
 
 ### Working notes are now ignored rather than merely untracked
 

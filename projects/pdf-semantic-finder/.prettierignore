@@ -8,3 +8,6 @@ worker-env.d.ts
 package-lock.json
 
 # Vendored Untitled UI reference, kept as published
+
+# Third-party skill copies. Reformatting them would modify redistributed material.
+.agents/

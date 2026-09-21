@@ -41,6 +41,28 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Agent skills under `.agents/`
+
+Five skills copied from public repositories and used as guidance while developing this project. They
+are not part of the application and nothing in `src/`, `worker/` or `dist/` depends on them.
+`skills-lock.json` records the source, path and content hash of each.
+
+| Skill                         | Source                                                                  | Licence    | Notice                               |
+| ----------------------------- | ----------------------------------------------------------------------- | ---------- | ------------------------------------ |
+| `frontend-design`             | [anthropics/skills](https://github.com/anthropics/skills)               | Apache-2.0 | `LICENSE.txt` in the skill directory |
+| `workers-best-practices`      | [cloudflare/skills](https://github.com/cloudflare/skills)               | Apache-2.0 | `LICENSE` in the skill directory     |
+| `vercel-composition-patterns` | [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) | MIT        | see below                            |
+| `vercel-react-best-practices` | [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) | MIT        | see below                            |
+| `web-design-guidelines`       | [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) | MIT        | see below                            |
+
+The three Vercel skills are granted by the line `## License` / `MIT` in that repository's README.
+Upstream ships no `LICENSE` file and no copyright line — its `package.json` has no `license` field
+and the GitHub API reports none — so there is no notice to reproduce and none is invented here. The
+grant, and the absence of a file carrying it, are both recorded above.
+
+The copies are verbatim. `.prettierignore` excludes `.agents/` so that formatting this repository
+does not quietly modify redistributed material.
+
 ## The Bitcoin whitepaper
 
 `assets/bitcoin.pdf` and `tests/fixtures/bitcoin.pdf` are Satoshi Nakamoto's "Bitcoin: A
