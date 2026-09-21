@@ -237,6 +237,21 @@ const joinLines = (lines: readonly ExtractedLine[]): string => {
 };
 
 /**
+ * The length of what a group of lines will actually become.
+ *
+ * `joinLines` inserts a space wherever two lines meet at a non-CJK boundary, so the assembled text
+ * is longer than the sum of its lines — by one character per join, which is every join in English
+ * prose. Summing the line lengths therefore let a group of N lines reach
+ * `maxSegmentCharacters + N - 1`: a seven-page English contract produced one segment of 805
+ * characters, and the Worker — which measures the text that arrives — refused the whole document
+ * with `segment_text_too_long`. The reader saw "The search could not be completed."
+ *
+ * So the bound is measured on the assembled text, which is the same string `buildSegments` emits as
+ * `originalText` and `semantic-search.ts` sends as `text`.
+ */
+const assembledLength = (lines: readonly ExtractedLine[]): number => countCharacters(tidyOriginalText(joinLines(lines)));
+
+/**
  * Splits a line that exceeds the hard maximum on its own.
  *
  * The split happens at item boundaries wherever possible, so each resulting line maps to exactly
@@ -336,12 +351,10 @@ const segmentPage = (page: SegmentationPage): ExtractedLine[][] => {
 
     const groups: ExtractedLine[][] = [];
     let currentGroup: ExtractedLine[] = [];
-    let currentLength = 0;
 
     const flush = () => {
         if (currentGroup.length > 0) groups.push(currentGroup);
         currentGroup = [];
-        currentLength = 0;
     };
 
     /**
@@ -365,7 +378,6 @@ const segmentPage = (page: SegmentationPage): ExtractedLine[][] => {
 
         groups.push(currentGroup.slice(0, lastSentenceEnd + 1));
         currentGroup = currentGroup.slice(lastSentenceEnd + 1);
-        currentLength = currentGroup.reduce((total, line) => total + countCharacters(line.text), 0);
     };
 
     lines.forEach((line, index) => {
@@ -386,7 +398,8 @@ const segmentPage = (page: SegmentationPage): ExtractedLine[][] => {
         // A continuation clause qualifies what precedes it, so it suppresses the boundary unless
         // keeping it would breach the hard limit.
         const isContinuation = CONTINUATION_PATTERN.test(line.text);
-        const wouldExceedHardLimit = currentLength + lineLength > LIMITS.maxSegmentCharacters;
+        const currentLength = assembledLength(currentGroup);
+        const wouldExceedHardLimit = assembledLength([...currentGroup, line]) > LIMITS.maxSegmentCharacters;
 
         /*
          * The soft cut says "close at the next opportunity", and a line boundary is not one. Lines
@@ -416,7 +429,6 @@ const segmentPage = (page: SegmentationPage): ExtractedLine[][] => {
         }
 
         currentGroup.push(line);
-        currentLength += lineLength;
     });
 
     flush();

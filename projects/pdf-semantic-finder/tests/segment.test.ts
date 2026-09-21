@@ -406,6 +406,34 @@ describe("buildSegments", () => {
         }
     });
 
+    it("never exceeds the hard maximum in Latin text either, where joining adds a space per line", () => {
+        /*
+         * Regression, found on the deployed site rather than here.
+         *
+         * The test above passes on Japanese for a reason that hides the defect: `joinLines` inserts
+         * no space where either side of a line break is CJK, so the assembled text is exactly the
+         * sum of its lines. In English every join adds one character, and the group length was
+         * summed from the lines rather than measured on what they assemble into — so a group of N
+         * lines could reach `maxSegmentCharacters + N - 1`.
+         *
+         * A seven-page English contract produced one segment of 805 characters. The Worker measures
+         * the text that arrives, refused the whole document with `segment_text_too_long`, and the
+         * reader saw only "The search could not be completed."
+         *
+         * Short wrapped lines with no sentence end are the shape that maximises the number of joins
+         * inside one group, which is what makes the overshoot largest.
+         */
+        const texts = Array.from({ length: 60 }, (_, index) => `clause ${index} of the agreement between the parties hereto`);
+        const segments = buildSegments([toPage(block(700, texts))]);
+
+        expect(segments.length).toBeGreaterThan(1);
+        for (const segment of segments) {
+            expect(countCharacters(segment.originalText), `over the cap: ${countCharacters(segment.originalText)}`).toBeLessThanOrEqual(
+                LIMITS.maxSegmentCharacters,
+            );
+        }
+    });
+
     it("splits a single overlong line rather than truncating it", () => {
         const overlong = "あ".repeat(LIMITS.maxSegmentCharacters * 2 + 50);
         const segments = buildSegments([toPage([line({ y: 700, text: overlong })])]);
